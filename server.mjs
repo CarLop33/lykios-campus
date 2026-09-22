@@ -14,6 +14,9 @@ const NODE_ENV = process.env.NODE_ENV || 'development';
 const ON_VERCEL = Boolean(process.env.VERCEL);
 const VERCEL_ENV = process.env.VERCEL_ENV || '';
 const IS_PROD = ON_VERCEL ? VERCEL_ENV === 'production' : NODE_ENV === 'production';
+const IS_PREVIEW = ON_VERCEL && VERCEL_ENV === 'preview';
+const ADMIN_EMAIL = IS_PREVIEW ? 'admin@lykiosacademy.com' : (process.env.LYKIOS_ADMIN_EMAIL || '');
+const ADMIN_PASSWORD = IS_PREVIEW ? 'AdminLykios2026!' : (process.env.LYKIOS_ADMIN_PASSWORD || '');
 const IS_SECURE = IS_PROD || ON_VERCEL;
 const APP_VERSION = process.env.LYKIOS_VERSION || '1.0.0-rc5';
 const APP_ORIGIN = (ON_VERCEL && VERCEL_ENV !== 'production' && process.env.VERCEL_URL) ? `https://${process.env.VERCEL_URL}` : (process.env.LYKIOS_APP_ORIGIN || `http://localhost:${PORT}`);
@@ -136,13 +139,13 @@ async function readDb(){
   const loaded=await persistence.load();
   if(!loaded) throw new Error('Almacenamiento sin estado inicial');
   const db=loaded.data;
-  if(process.env.LYKIOS_ADMIN_EMAIL && process.env.LYKIOS_ADMIN_PASSWORD){
+  if(ADMIN_EMAIL && ADMIN_PASSWORD){
     db.meta ||= {};
-    const email=String(process.env.LYKIOS_ADMIN_EMAIL).trim().toLowerCase();
-    const fingerprint=crypto.createHash('sha256').update(email+'\0'+String(process.env.LYKIOS_ADMIN_PASSWORD)).digest('hex');
+    const email=String(ADMIN_EMAIL).trim().toLowerCase();
+    const fingerprint=crypto.createHash('sha256').update(email+'\0'+String(ADMIN_PASSWORD)).digest('hex');
     if(db.meta.adminCredentialFingerprint!==fingerprint){
       let admin=db.users.find(u=>u.role==='admin');
-      const hp=hashPassword(String(process.env.LYKIOS_ADMIN_PASSWORD));
+      const hp=hashPassword(String(ADMIN_PASSWORD));
       if(!admin){
         admin={id:newId(),email,firstName:'Lykios',lastName:'Admin',role:'admin',status:'active',lastLoginAt:null,passwordSalt:hp.salt,passwordHash:hp.hash,createdAt:now()};
         db.users.push(admin);
@@ -193,7 +196,7 @@ async function writeDb(db){
 
 async function seedDb(){
   const studentPass = IS_PROD ? null : hashPassword('Lykios2026!');
-  const adminPass = hashPassword(IS_PROD ? process.env.LYKIOS_ADMIN_PASSWORD : 'AdminLykios2026!');
+  const adminPass = hashPassword(IS_PREVIEW ? ADMIN_PASSWORD : (IS_PROD ? ADMIN_PASSWORD : 'AdminLykios2026!'));
   const teacherPass = IS_PROD ? null : hashPassword('ProfesorLykios2026!');
   const manifest = JSON.parse(await readFile(path.join(__dirname,'content','peeling-quimico.json'),'utf8'));
   const course = manifest.course;
@@ -212,7 +215,7 @@ async function seedDb(){
   const db = {
     meta:{ schemaVersion:13, createdAt:now(), app:'Lykios LMS', tutorPolicy:{retainQueriesDays:30,storeQuestionText:true,feedbackEnabled:true} },
     users: IS_PROD ? [
-      { id:adminId, email:String(process.env.LYKIOS_ADMIN_EMAIL).toLowerCase(), firstName:'Lykios', lastName:'Admin', role:'admin', status:'active', lastLoginAt:null, passwordSalt:adminPass.salt, passwordHash:adminPass.hash, createdAt:now() }
+      { id:adminId, email:String(ADMIN_EMAIL).toLowerCase(), firstName:'Lykios', lastName:'Admin', role:'admin', status:'active', lastLoginAt:null, passwordSalt:adminPass.salt, passwordHash:adminPass.hash, createdAt:now() }
     ] : [
       { id:studentId, email:'alumno@lykiosacademy.com', firstName:'Carlos', lastName:'Alumno', role:'student', status:'active', lastLoginAt:null, passwordSalt:studentPass.salt, passwordHash:studentPass.hash, createdAt:now() },
       { id:adminId, email:'admin@lykiosacademy.com', firstName:'Lykios', lastName:'Admin', role:'admin', status:'active', lastLoginAt:null, passwordSalt:adminPass.salt, passwordHash:adminPass.hash, createdAt:now() },
