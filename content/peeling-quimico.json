@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "course": {
+    "slug": "peeling-quimico-medicina-estetica",
+    "title": "Peeling Químico en Medicina Estética",
+    "subtitle": "Formación clínica avanzada para médicos",
+    "category": "Medicina estética",
+    "audience": "Médicos, preferentemente médicos estéticos",
+    "instructor": "Dr. Carlos López Scovino",
+    "language": "es",
+    "status": "production",
+    "certificateEnabled": true,
+    "completionRule": {
+      "requireAllLessons": true,
+      "requireAssessments": true,
+      "minimumAssessmentScore": 80
+    },
+    "modules": [
+      {
+        "position": 1,
+        "code": "M1",
+        "title": "ABC de la piel aplicado al peeling",
+        "status": "completed",
+        "lessons": [
+          {"code":"1.1","title":"Anatomía e histología cutáneas aplicadas al peeling","status":"completed","video":null,"summaryPdf":null,"assessment":true},
+          {"code":"1.2","title":"Fisiología cutánea","status":"completed","video":null,"summaryPdf":null,"assessment":true},
+          {"code":"1.3","title":"Fisiopatología cutánea","status":"completed","video":null,"summaryPdf":null,"assessment":true},
+          {"code":"1.4","title":"Funciones de la piel","status":"completed","video":null,"summaryPdf":null,"assessment":true}
+        ]
+      },
+      {
+        "position": 2,
+        "code": "M2",
+        "title": "Fundamentos clínicos del peeling químico",
+        "status": "production",
+        "lessons": [
+          {"code":"2.1","title":"Fundamentos del peeling químico","status":"completed","video":null,"summaryPdf":null,"assessment":true},
+          {"code":"2.2","title":"Concentración, pH y vehículo","status":"completed","video":null,"summaryPdf":null,"assessment":false},
+          {"code":"2.3","title":"Profundidad del peeling","status":"completed","video":null,"summaryPdf":null,"assessment":false},
+          {"code":"2.4","title":"Agentes químicos","status":"completed","video":null,"summaryPdf":null,"assessment":false},
+          {"code":"2.5","title":"Ácido glicólico","status":"completed","video":null,"summaryPdf":null,"assessment":false},
+          {"code":"2.6","title":"Ácido salicílico","status":"completed","video":null,"summaryPdf":null,"assessment":false},
+          {"code":"2.7","title":"Ácido mandélico","status":"completed","video":null,"summaryPdf":null,"assessment":false},
+          {"code":"2.8","title":"Ácido láctico","status":"completed","video":null,"summaryPdf":null,"assessment":false},
+          {"code":"2.9","title":"Ácido pirúvico","status":"production","video":null,"summaryPdf":null,"assessment":false}
+        ]
+      }
+    ]
+  }
+}
