@@ -84,7 +84,13 @@ function sameOrigin(req){
   if(['GET','HEAD','OPTIONS'].includes(req.method)) return true;
   const origin=req.headers.origin;
   if(!origin) return !IS_PROD; // browsers should send Origin for fetch POSTs
-  try{return new URL(origin).origin===new URL(APP_ORIGIN).origin}catch{return false}
+  try{
+    const originUrl=new URL(origin);
+    const allowed=new Set([new URL(APP_ORIGIN).origin]);
+    const host=String(req.headers['x-forwarded-host']||req.headers.host||'').trim();
+    if(host) allowed.add(`https://${host}`);
+    return allowed.has(originUrl.origin);
+  }catch{return false}
 }
 function sessionCookie(token,maxAge=SESSION_TTL_MS/1000){
   const secure=IS_SECURE?'; Secure':'';
