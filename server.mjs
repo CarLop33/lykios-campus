@@ -589,6 +589,7 @@ function certificatePdf(cert){
   lines.push('0.99 1 1 rg 24 24 794 547 re f');
   lines.push('0.78 0.66 0.43 RG 2 w 40 40 762 515 re S');
   lines.push('0.20 0.62 0.65 RG 1 w 56 56 730 483 re S');
+  lines.push('0.04 0.16 0.18 rg');
   txt(78,505,16,'LYKIOS ACADEMY','F2');
   txt(78,477,9,'FORMACIÓN MÉDICA Y PROFESIONAL','F1');
   txt(78,433,13,'CERTIFICADO DE FINALIZACIÓN','F2');
@@ -1290,7 +1291,7 @@ export const handleRequest=async (req,res)=>{
           if(!course)return json(res,404,{error:'No hay cursos disponibles'});
           const sample={code:'LYK-2026-VISTA-PREVIA',status:'valid',studentName:'Alumno de prueba',courseTitle:course.title,courseSubtitle:course.subtitle||'',issuedAt:now(),issuer:'Lykios Academy',verificationPath:'/verify/LYK-2026-VISTA-PREVIA'};
           const buf=certificatePdf(sample);
-          return text(res,200,buf,'application/pdf',{'content-disposition':'attachment; filename="Vista-previa-certificado-Lykios.pdf"','cache-control':'no-store'});
+          return text(res,200,buf,'application/pdf',{'content-disposition':'inline; filename="Vista-previa-certificado-Lykios.pdf"','cache-control':'no-store'});
         }
         if(url.pathname==='/api/admin/certificates' && req.method==='GET') return json(res,200,{certificates:db.certificates.slice().sort((a,b)=>new Date(b.issuedAt)-new Date(a.issuedAt)).map(c=>({id:c.id,...publicCertificate(db,c)}))});
         if(url.pathname==='/api/admin/emails' && req.method==='GET') return json(res,200,{emails:emailAdminPayload(db)});
