@@ -10,3 +10,5 @@ LMS propio de Lykios Academy. Paquete RC5 preparado para Vercel serverless.
 - Rama `preview`: utilizada para despliegues de prueba en Vercel sin Stripe Live.
 
 Lee `DEPLOY-VERCEL.md` antes de importar el proyecto.
+
+Preview redeploy after env sync.
