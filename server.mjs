@@ -1193,3 +1193,6 @@ if(!process.env.VERCEL){
   server.requestTimeout=30_000; server.headersTimeout=35_000; server.keepAliveTimeout=5_000;
   server.listen(PORT,()=>logEvent('info','server_started',{port:PORT,env:NODE_ENV,dataDir:DATA_DIR,uploadDir:UPLOAD_DIR}));
 }
+
+
+export default handleRequest;
