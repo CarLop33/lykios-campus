@@ -7,5 +7,6 @@ LMS propio de Lykios Academy. Paquete RC5 preparado para Vercel serverless.
 - Datos: PostgreSQL (Neon recomendado para empezar)
 - Recursos privados: Vercel Blob
 - Pagos: Stripe, activación por webhook firmado
+- Rama `preview`: utilizada para despliegues de prueba en Vercel sin Stripe Live.
 
 Lee `DEPLOY-VERCEL.md` antes de importar el proyecto.
