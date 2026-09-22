@@ -586,18 +586,25 @@ function certificatePdf(cert){
   const lines=[];
   const txt=(x,y,size,text,font='F1')=>lines.push(`BT /${font} ${size} Tf ${x} ${y} Td (${pdfEscape(text)}) Tj ET`);
   lines.push('0.02 0.24 0.28 rg 0 0 842 595 re f');
-  lines.push('0.99 1 1 rg 28 28 786 539 re f');
-  lines.push('0.78 0.66 0.43 RG 2 w 42 42 758 511 re S');
-  txt(82,500,15,'LYKIOS ACADEMY','F2');
-  txt(82,462,11,'CERTIFICADO DE FINALIZACION','F2');
-  txt(82,415,13,'Se certifica que','F1');
-  txt(82,372,28,cert.studentName,'F2');
-  txt(82,330,13,'ha completado satisfactoriamente el curso','F1');
-  txt(82,290,22,cert.courseTitle,'F2');
-  txt(82,246,11,`Emitido: ${new Date(cert.issuedAt).toLocaleDateString('es-ES')}`,'F1');
-  txt(82,220,10,`Codigo de verificacion: ${cert.code}`,'F1');
-  txt(82,194,9,`Verificar en: campus.lykiosacademy.com/verify/${cert.code}`,'F1');
-  txt(82,112,11,'Lykios Academy · Formación que transforma conocimiento en práctica','F1');
+  lines.push('0.99 1 1 rg 24 24 794 547 re f');
+  lines.push('0.78 0.66 0.43 RG 2 w 40 40 762 515 re S');
+  lines.push('0.20 0.62 0.65 RG 1 w 56 56 730 483 re S');
+  txt(78,505,16,'LYKIOS ACADEMY','F2');
+  txt(78,477,9,'FORMACIÓN MÉDICA Y PROFESIONAL','F1');
+  txt(78,433,13,'CERTIFICADO DE FINALIZACIÓN','F2');
+  txt(78,394,11,'Se certifica que','F1');
+  txt(78,354,29,cert.studentName,'F2');
+  txt(78,319,11,'ha completado satisfactoriamente el curso','F1');
+  txt(78,282,21,cert.courseTitle,'F2');
+  if(cert.courseSubtitle)txt(78,258,10,cert.courseSubtitle,'F1');
+  txt(78,216,10,`Fecha de emisión: ${new Date(cert.issuedAt).toLocaleDateString('es-ES')}`,'F1');
+  txt(78,195,10,`Código de verificación: ${cert.code}`,'F2');
+  txt(78,174,9,`Verificación pública: campus.lykiosacademy.com/verify/${cert.code}`,'F1');
+  lines.push('0.78 0.66 0.43 RG 1 w 78 118 220 0 re S');
+  txt(78,98,10,'Dr. Carlos López Scovino','F2');
+  txt(78,82,9,'Dirección académica · Lykios Academy','F1');
+  txt(500,98,9,'Documento verificable mediante código único','F1');
+  txt(500,82,8,'Emitido por Lykios Academy','F1');
   const stream=lines.join('\n');
   const objs=[];
   objs[1]='<< /Type /Catalog /Pages 2 0 R >>';
@@ -1278,6 +1285,13 @@ export const handleRequest=async (req,res)=>{
         if(url.pathname==='/api/admin/promotion' && req.method==='POST'){const body=await readBody(req);const p={id:newId(),name:cleanText(body.name,160),badge:cleanText(body.badge||'Oferta',40),targetType:body.targetType==='bundle'?'bundle':'course',targetId:cleanText(body.targetId,80),discountType:['percent','fixed'].includes(body.discountType)?body.discountType:'percent',value:Math.max(0,Number(body.value)||0),currency:'EUR',priority:Math.round(Number(body.priority)||0),startsAt:body.startsAt||null,endsAt:body.endsAt||null,active:body.active!==false&&body.active!=='false',createdAt:now(),updatedAt:now()};if(!p.name||!p.targetId)return json(res,400,{error:'Nombre y producto son obligatorios'});db.promotions.push(p);await writeDb(db);return json(res,201,{promotion:p});}
         const promotionMatch=url.pathname.match(/^\/api\/admin\/promotion\/([^/]+)$/);
         if(promotionMatch){const p=(db.promotions||[]).find(x=>x.id===promotionMatch[1]);if(!p)return json(res,404,{error:'Promoción no encontrada'});if(req.method==='PUT'){const body=await readBody(req);for(const k of ['name','badge','startsAt','endsAt'])if(body[k]!==undefined)p[k]=body[k]||null;if(body.targetType!==undefined)p.targetType=body.targetType==='bundle'?'bundle':'course';if(body.targetId!==undefined)p.targetId=cleanText(body.targetId,80);if(body.discountType!==undefined)p.discountType=['percent','fixed'].includes(body.discountType)?body.discountType:p.discountType;if(body.value!==undefined)p.value=Math.max(0,Number(body.value)||0);if(body.priority!==undefined)p.priority=Math.round(Number(body.priority)||0);if(body.active!==undefined)p.active=body.active!==false&&body.active!=='false';p.updatedAt=now();await writeDb(db);return json(res,200,{promotion:p});}if(req.method==='DELETE'){db.promotions=db.promotions.filter(x=>x.id!==p.id);await writeDb(db);return json(res,200,{ok:true});}}
+        if(url.pathname==='/api/admin/certificate/preview' && req.method==='GET'){
+          const course=db.courses.find(c=>c.id===url.searchParams.get('courseId'))||db.courses.find(c=>c.slug==='peeling-quimico')||db.courses[0];
+          if(!course)return json(res,404,{error:'No hay cursos disponibles'});
+          const sample={code:'LYK-2026-VISTA-PREVIA',status:'valid',studentName:'Alumno de prueba',courseTitle:course.title,courseSubtitle:course.subtitle||'',issuedAt:now(),issuer:'Lykios Academy',verificationPath:'/verify/LYK-2026-VISTA-PREVIA'};
+          const buf=certificatePdf(sample);
+          return text(res,200,buf,'application/pdf',{'content-disposition':'attachment; filename="Vista-previa-certificado-Lykios.pdf"','cache-control':'no-store'});
+        }
         if(url.pathname==='/api/admin/certificates' && req.method==='GET') return json(res,200,{certificates:db.certificates.slice().sort((a,b)=>new Date(b.issuedAt)-new Date(a.issuedAt)).map(c=>({id:c.id,...publicCertificate(db,c)}))});
         if(url.pathname==='/api/admin/emails' && req.method==='GET') return json(res,200,{emails:emailAdminPayload(db)});
         if(url.pathname==='/api/admin/analytics' && req.method==='GET') return json(res,200,adminAnalyticsPayload(db));
