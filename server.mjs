@@ -36,6 +36,7 @@ const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const MAX_JSON_BYTES = 9_000_000;
 const MAX_RESOURCE_BYTES = 6_000_000;
 const MAX_TEST_VIDEO_BYTES = 3_000_000;
+const MAX_VIDEO_BYTES = 1_000_000_000;
 const VIDEO_TOKEN_TTL_MS = 1000 * 60 * 10;
 const VIDEO_TOKEN_SECRET = process.env.LYKIOS_VIDEO_SECRET || (IS_PROD ? '' : crypto.randomBytes(32).toString('hex'));
 
@@ -68,7 +69,7 @@ const securityHeaders = {
   'permissions-policy':'camera=(), microphone=(), geolocation=(), payment=(self)',
   'cross-origin-opener-policy':'same-origin',
   'cross-origin-resource-policy':'same-origin',
-  'content-security-policy': "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'"
+  'content-security-policy': "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob:; media-src 'self' blob: https://*.private.blob.vercel-storage.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://*.private.blob.vercel-storage.com"
 };
 if (IS_PROD) securityHeaders['strict-transport-security']='max-age=31536000; includeSubDomains';
 
@@ -299,6 +300,24 @@ function verifyVideoToken(token){
     return {userId,lessonId,expiresAt:Number(expiresAt)};
   }catch{return null}
 }
+function signVideoUploadTicket(payload){
+  const body=Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig=crypto.createHmac('sha256',VIDEO_TOKEN_SECRET).update(body).digest('base64url');
+  return body+'.'+sig;
+}
+function verifyVideoUploadTicket(ticket){
+  try{
+    const [body,sig]=String(ticket||'').split('.');
+    if(!body||!sig)return null;
+    const expected=crypto.createHmac('sha256',VIDEO_TOKEN_SECRET).update(body).digest('base64url');
+    const a=Buffer.from(sig), b=Buffer.from(expected);
+    if(a.length!==b.length||!crypto.timingSafeEqual(a,b))return null;
+    const payload=JSON.parse(Buffer.from(body,'base64url').toString('utf8'));
+    if(!payload?.lessonId||!payload?.pathname||Number(payload.expiresAt)<Date.now())return null;
+    return payload;
+  }catch{return null}
+}
+
 function videoProgressPayload(db,user,lessonId){
   const v=db.videoProgress.find(x=>x.userId===user.id&&x.lessonId===lessonId);
   return v?{currentTime:v.currentTime||0,duration:v.duration||0,percent:v.percent||0,lastPlayedAt:v.lastPlayedAt||null,completed:Boolean(v.completed)}:{currentTime:0,duration:0,percent:0,lastPlayedAt:null,completed:false};
@@ -1044,7 +1063,16 @@ export const handleRequest=async (req,res)=>{
         if(!lesson.video) return json(res,404,{error:'Esta clase aún no tiene vídeo configurado'});
         const expiresAt=Date.now()+VIDEO_TOKEN_TTL_MS;
         const token=signVideoToken({userId:user.id,lessonId:lesson.id,expiresAt});
-        return json(res,200,{token,expiresAt,streamUrl:`/api/video/stream?token=${encodeURIComponent(token)}`,progress:videoProgressPayload(db,user,lesson.id)});
+        let streamUrl=`/api/video/stream?token=${encodeURIComponent(token)}`;
+        const ref=String(lesson.video||'');
+        if(ref.startsWith('blob:')){
+          const pathname=ref.slice(5);
+          const {issueSignedToken,presignUrl}=await import('@vercel/blob');
+          const signedToken=await issueSignedToken({pathname,operations:['get'],validUntil:expiresAt});
+          const signed=await presignUrl(signedToken,{pathname,operation:'get',validUntil:expiresAt});
+          streamUrl=signed.presignedUrl;
+        }
+        return json(res,200,{token,expiresAt,streamUrl,progress:videoProgressPayload(db,user,lesson.id)});
       }
       if(url.pathname==='/api/video/progress' && req.method==='POST'){
         const body=await readBody(req); const lesson=db.lessons.find(l=>l.id===body.lessonId);
@@ -1211,6 +1239,37 @@ export const handleRequest=async (req,res)=>{
 
         const certMatch=url.pathname.match(/^\/api\/admin\/certificate\/([^/]+)\/revoke$/);
         if(certMatch&&req.method==='POST'){const cert=db.certificates.find(c=>c.id===certMatch[1]);if(!cert)return json(res,404,{error:'Certificado no encontrado'});cert.status='revoked';cert.revokedAt=now();await writeDb(db);return json(res,200,{certificate:publicCertificate(db,cert)});}
+
+        if(url.pathname==='/api/admin/video/upload-url' && req.method==='POST'){
+          const body=await readBody(req);const lesson=db.lessons.find(l=>l.id===body.lessonId);if(!lesson)return json(res,404,{error:'Clase no encontrada'});
+          const name=cleanText(body.name,220);const mime=cleanText(body.mime,120).toLowerCase();const size=Math.max(0,Number(body.size)||0);
+          if(!name||!size)return json(res,400,{error:'Datos de vídeo incompletos'});
+          if(!['video/mp4','video/webm','video/quicktime'].includes(mime))return json(res,415,{error:'Formato de vídeo no permitido'});
+          if(size>MAX_VIDEO_BYTES)return json(res,413,{error:'El vídeo supera el límite de 1 GB por archivo'});
+          const ext=path.extname(name).slice(0,10).replace(/[^.a-zA-Z0-9]/g,'')||'.mp4';
+          const pathname=`videos/${lesson.id}/${newId()}${ext}`;
+          const expiresAt=Date.now()+15*60*1000;
+          const {issueSignedToken,presignUrl}=await import('@vercel/blob');
+          const signedToken=await issueSignedToken({pathname,operations:['put'],validUntil:expiresAt});
+          const signed=await presignUrl(signedToken,{pathname,operation:'put',validUntil:expiresAt});
+          const ticket=signVideoUploadTicket({lessonId:lesson.id,pathname,name,mime,size,expiresAt});
+          return json(res,200,{uploadUrl:signed.presignedUrl,ticket,expiresAt});
+        }
+        if(url.pathname==='/api/admin/video/complete' && req.method==='POST'){
+          const body=await readBody(req);const claims=verifyVideoUploadTicket(body.ticket);if(!claims)return json(res,400,{error:'Carga de vídeo inválida o caducada'});
+          const lesson=db.lessons.find(l=>l.id===claims.lessonId);if(!lesson)return json(res,404,{error:'Clase no encontrada'});
+          const {issueSignedToken,presignUrl}=await import('@vercel/blob');
+          const headExpiry=Date.now()+60*1000;
+          const headToken=await issueSignedToken({pathname:claims.pathname,operations:['head'],validUntil:headExpiry});
+          const headSigned=await presignUrl(headToken,{pathname:claims.pathname,operation:'head',validUntil:headExpiry});
+          const check=await fetch(headSigned.presignedUrl,{method:'HEAD'});
+          if(!check.ok)return json(res,409,{error:'El archivo todavía no está disponible en Blob'});
+          const storedSize=Number(check.headers.get('content-length')||0);
+          if(storedSize&&Number(claims.size)&&storedSize!==Number(claims.size))return json(res,409,{error:'El tamaño almacenado no coincide con el archivo seleccionado'});
+          if(String(lesson.video||'').startsWith('blob:')){const oldRef=String(lesson.video).slice(5);if(oldRef!==claims.pathname){try{await resourceStore.remove(oldRef);}catch{}}}
+          lesson.video=`blob:${claims.pathname}`;lesson.videoMime=claims.mime;lesson.videoName=claims.name;lesson.videoSize=storedSize||Number(claims.size)||null;lesson.updatedAt=now();
+          await writeDb(db);return json(res,201,{ok:true,video:{name:lesson.videoName,mime:lesson.videoMime,size:lesson.videoSize}});
+        }
 
         if(url.pathname==='/api/admin/video' && req.method==='POST'){
           const body=await readBody(req);const lesson=db.lessons.find(l=>l.id===body.lessonId);if(!lesson)return json(res,404,{error:'Clase no encontrada'});
