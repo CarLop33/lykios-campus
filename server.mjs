@@ -628,11 +628,14 @@ img.save(sys.stdout.buffer,format='PNG')`;
   });
 }
 function htmlEsc(v=''){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function verificationHtml(cert){
+function verificationHtml(cert,requestedCode=''){
   const valid=cert&&cert.status==='valid';
-  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verificar certificado · Lykios Academy</title><link rel="stylesheet" href="/styles.css"></head><body><main class="verify-page"><div class="verify-brand">LYKIOS <span>ACADEMY</span></div><section class="verify-card ${valid?'valid':'invalid'}"><div class="verify-icon">${valid?'✓':'!'}</div><div class="page-kicker">VERIFICACION PUBLICA</div><h1>${valid?'Certificado auténtico':'Certificado no válido'}</h1>${cert?`<p>Este certificado figura en el registro de Lykios Academy.</p><dl><dt>Alumno</dt><dd>${htmlEsc(cleanText(cert.studentName,200))}</dd><dt>Curso</dt><dd>${htmlEsc(cleanText(cert.courseTitle,250))}</dd><dt>Fecha de emisión</dt><dd>${new Date(cert.issuedAt).toLocaleDateString('es-ES')}</dd><dt>Código</dt><dd>${htmlEsc(cleanText(cert.code,80))}</dd><dt>Estado</dt><dd>${valid?'Válido':'Revocado'}</dd></dl><img class="verify-qr" src="/api/public/certificate/qr?code=${encodeURIComponent(cert.code)}" alt="QR de verificación">`:''}<a class="btn" href="/">Ir a Lykios Academy</a></section></main></body></html>`;
+  const revoked=cert&&cert.status==='revoked';
+  const code=cleanText(requestedCode||cert?.code||'',80).toUpperCase();
+  const title=valid?'Certificado auténtico':revoked?'Certificado revocado':code?'Certificado no encontrado':'Verificar certificado';
+  const intro=valid?'Este certificado figura como válido en el registro de Lykios Academy.':revoked?'Este certificado existe, pero ha sido revocado por Lykios Academy.':code?'No existe un certificado con ese código en el registro público.':'Introduce el código impreso en el certificado para comprobar su autenticidad.';
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><title>${htmlEsc(title)} · Lykios Academy</title><link rel="stylesheet" href="/styles.css"></head><body><main class="verify-page"><div class="verify-brand">LYKIOS <span>ACADEMY</span></div><section class="verify-card ${valid?'valid':revoked?'invalid':''}"><div class="verify-icon">${valid?'✓':revoked?'!':'◇'}</div><div class="page-kicker">VERIFICACIÓN PÚBLICA</div><h1>${htmlEsc(title)}</h1><p>${htmlEsc(intro)}</p>${cert?`<dl><dt>Alumno</dt><dd>${htmlEsc(cleanText(cert.studentName,200))}</dd><dt>Curso</dt><dd>${htmlEsc(cleanText(cert.courseTitle,250))}</dd><dt>Fecha de emisión</dt><dd>${new Date(cert.issuedAt).toLocaleDateString('es-ES')}</dd><dt>Código</dt><dd>${htmlEsc(cleanText(cert.code,80))}</dd><dt>Estado</dt><dd>${valid?'Válido':'Revocado'}</dd></dl>${valid?`<img class="verify-qr" src="/api/public/certificate/qr?code=${encodeURIComponent(cert.code)}" alt="QR de verificación">`:''}`:''}<form class="verify-search" method="get" action="/verify"><label for="certificateCode">Código del certificado</label><div class="verify-search-row"><input id="certificateCode" name="code" value="${htmlEsc(code)}" autocomplete="off" placeholder="LYK-2026-XXXXXXXXXX" maxlength="40" required><button class="btn" type="submit">Verificar</button></div></form><p class="muted">La verificación pública muestra únicamente los datos necesarios para confirmar la autenticidad del certificado.</p><a class="btn-secondary" href="/">Ir a Lykios Academy</a></section></main></body></html>`;
 }
-
 
 function adminAnalyticsPayload(db){
   const publishedCourses=db.courses.filter(c=>c.status==='published');
@@ -1034,18 +1037,24 @@ export const handleRequest=async (req,res)=>{
       return json(res,200,{ok:true},{'set-cookie':sessionCookie('',0)});
     }
 
+    if(url.pathname==='/verify' && req.method==='GET'){
+      const code=cleanText(url.searchParams.get('code')||'',80).toUpperCase();
+      if(!code)return text(res,200,verificationHtml(null,''),'text/html; charset=utf-8',{'cache-control':'no-store'});
+      const db=await readDb();const cert=db.certificates.find(c=>c.code===code);const payload=cert?publicCertificate(db,cert):null;
+      return text(res,payload?200:404,verificationHtml(payload,code),'text/html; charset=utf-8',{'cache-control':'no-store'});
+    }
     const verifyMatch=url.pathname.match(/^\/verify\/([A-Z0-9-]+)$/i);
     if(verifyMatch && req.method==='GET'){
-      const db=await readDb(); const cert=db.certificates.find(c=>c.code===verifyMatch[1].toUpperCase());
+      const code=verifyMatch[1].toUpperCase();const db=await readDb(); const cert=db.certificates.find(c=>c.code===code);
       const payload=cert?publicCertificate(db,cert):null;
-      return text(res,payload?200:404,verificationHtml(payload),'text/html; charset=utf-8');
+      return text(res,payload?200:404,verificationHtml(payload,code),'text/html; charset=utf-8',{'cache-control':'no-store'});
     }
     if(url.pathname==='/api/public/certificate' && req.method==='GET'){
       const db=await readDb(); const code=String(url.searchParams.get('code')||'').toUpperCase(); const cert=db.certificates.find(c=>c.code===code);
-      const payload=cert?publicCertificate(db,cert):null; return payload?json(res,200,payload):json(res,404,{error:'Certificado no encontrado'});
+      const payload=cert?publicCertificate(db,cert):null; return payload?json(res,200,payload,{'cache-control':'no-store'}):json(res,404,{error:'Certificado no encontrado'},{'cache-control':'no-store'});
     }
     if(url.pathname==='/api/public/certificate/qr' && req.method==='GET'){
-      const db=await readDb(); const code=String(url.searchParams.get('code')||'').toUpperCase(); const cert=db.certificates.find(c=>c.code===code); if(!cert)return json(res,404,{error:'Certificado no encontrado'});
+      const db=await readDb(); const code=String(url.searchParams.get('code')||'').toUpperCase(); const cert=db.certificates.find(c=>c.code===code); if(!cert)return json(res,404,{error:'Certificado no encontrado'});if((cert.status||'valid')!=='valid')return json(res,410,{error:'Certificado revocado'});
       const host=req.headers.host||'campus.lykiosacademy.com'; const proto=host.includes('localhost')?'http':'https'; const target=`${proto}://${host}/verify/${cert.code}`;
       try{return text(res,200,await qrPng(target),'image/png',{'cache-control':'public, max-age=86400'});}catch{return json(res,503,{error:'QR no disponible en este entorno'});}
     }
