@@ -7,8 +7,13 @@ function normalizePath(value) {
 }
 
 export default async function handler(req, res) {
-  const rawPath = normalizePath(req.query?.path);
   const current = new URL(req.url || '/', 'https://lykios.internal');
+  let rawPath = normalizePath(req.query?.path);
+
+  if (!rawPath) {
+    const pathname = current.pathname || '';
+    if (pathname.startsWith('/api/')) rawPath = pathname.slice('/api/'.length);
+  }
 
   current.searchParams.delete('path');
   const qs = current.searchParams.toString();
