@@ -184,6 +184,17 @@ async function readDb(){
   if ((db.meta?.schemaVersion||1) < 11) { db.tutorQueries ||= []; db.lessons.forEach(l=>{ if(l.tutorApproved===undefined) l.tutorApproved = l.status==='published'; if(l.tutorContent===undefined) l.tutorContent = ''; if(l.tutorApprovedAt===undefined) l.tutorApprovedAt = l.tutorApproved ? (l.updatedAt||l.createdAt||now()) : null; }); db.meta.schemaVersion=11; changed=true; }
   if ((db.meta?.schemaVersion||1) < 12) { db.tutorFeedback ||= []; db.meta.tutorPolicy ||= { retainQueriesDays:30, storeQuestionText:true, feedbackEnabled:true }; db.meta.schemaVersion=12; changed=true; }
   if ((db.meta?.schemaVersion||1) < 13) { db.paymentEvents ||= []; db.meta.schemaVersion=13; changed=true; }
+  if ((db.meta?.schemaVersion||1) < 14) {
+    db.lessons.forEach(l=>{
+      if(!Array.isArray(l.videos)){
+        l.videos=l.video?[{id:l.videoId||newId(),ref:l.video,name:l.videoName||'Vídeo 1',mime:l.videoMime||'video/mp4',size:l.videoSize||null,position:1,createdAt:l.updatedAt||l.createdAt||now()}]:[];
+      }
+      syncPrimaryVideoFields(l);
+      const first=l.videos[0];
+      if(first) db.videoProgress.filter(v=>v.lessonId===l.id&&!v.videoId).forEach(v=>{v.videoId=first.id;});
+    });
+    db.meta.schemaVersion=14; changed=true;
+  }
   if (db.meta?.tutorPolicy) { const days=Math.max(0,Number(db.meta.tutorPolicy.retainQueriesDays)||0); if(days>0 && Array.isArray(db.tutorQueries)){ const cutoff=Date.now()-days*86400000; const before=db.tutorQueries.length; db.tutorQueries=db.tutorQueries.filter(q=>new Date(q.createdAt).getTime()>=cutoff); if(db.tutorQueries.length!==before) changed=true; } }
   if(changed) await writeDb(db);
   return db;
@@ -209,7 +220,7 @@ async function seedDb(){
   const lessons = [];
   for (const m of course.modules) {
     const mod = modules.find(x=>x.code===m.code);
-    m.lessons.forEach((l,idx)=>lessons.push({ id:newId(), moduleId:mod.id, courseId, code:l.code, title:l.title, summary:'', position:idx+1, status:l.status==='production'?'draft':'published', durationMinutes:12, video:null, resources:[], tutorApproved:true, tutorContent:'', tutorApprovedAt:now(), createdAt:now(), updatedAt:now() }));
+    m.lessons.forEach((l,idx)=>lessons.push({ id:newId(), moduleId:mod.id, courseId, code:l.code, title:l.title, summary:'', position:idx+1, status:l.status==='production'?'draft':'published', durationMinutes:12, video:null, videos:[], resources:[], tutorApproved:true, tutorContent:'', tutorApprovedAt:now(), createdAt:now(), updatedAt:now() }));
   }
   const studentId = newId();
   const adminId = newId();
@@ -217,7 +228,7 @@ async function seedDb(){
   const enrollmentId = newId();
   const completedCodes = ['1.1','1.2','1.3','1.4','2.1','2.2'];
   const db = {
-    meta:{ schemaVersion:13, createdAt:now(), app:'Lykios LMS', tutorPolicy:{retainQueriesDays:30,storeQuestionText:true,feedbackEnabled:true} },
+    meta:{ schemaVersion:14, createdAt:now(), app:'Lykios LMS', tutorPolicy:{retainQueriesDays:30,storeQuestionText:true,feedbackEnabled:true} },
     users: IS_PROD ? [
       { id:adminId, email:String(ADMIN_EMAIL).toLowerCase(), firstName:'Lykios', lastName:'Admin', role:'admin', status:'active', lastLoginAt:null, passwordSalt:adminPass.salt, passwordHash:adminPass.hash, createdAt:now() }
     ] : [
@@ -318,9 +329,31 @@ function verifyVideoUploadTicket(ticket){
   }catch{return null}
 }
 
-function videoProgressPayload(db,user,lessonId){
-  const v=db.videoProgress.find(x=>x.userId===user.id&&x.lessonId===lessonId);
+function lessonVideos(lesson){
+  if(Array.isArray(lesson?.videos)&&lesson.videos.length)return lesson.videos.slice().sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0));
+  if(lesson?.video)return [{id:lesson.videoId||'primary',ref:lesson.video,name:lesson.videoName||'Vídeo 1',mime:lesson.videoMime||'video/mp4',size:lesson.videoSize||null,position:1,createdAt:lesson.updatedAt||lesson.createdAt||now()}];
+  return [];
+}
+function syncPrimaryVideoFields(lesson){
+  const first=lessonVideos(lesson)[0]||null;
+  lesson.video=first?.ref||null;
+  lesson.videoId=first?.id||null;
+  lesson.videoName=first?.name||null;
+  lesson.videoMime=first?.mime||null;
+  lesson.videoSize=first?.size||null;
+}
+function singleVideoProgress(db,user,lessonId,videoId){
+  const v=db.videoProgress.find(x=>x.userId===user.id&&x.lessonId===lessonId&&String(x.videoId||'')===String(videoId||''));
   return v?{currentTime:v.currentTime||0,duration:v.duration||0,percent:v.percent||0,lastPlayedAt:v.lastPlayedAt||null,completed:Boolean(v.completed)}:{currentTime:0,duration:0,percent:0,lastPlayedAt:null,completed:false};
+}
+function videoProgressPayload(db,user,lessonId,videoId=null){
+  if(videoId)return singleVideoProgress(db,user,lessonId,videoId);
+  const lesson=db.lessons.find(l=>l.id===lessonId);const videos=lessonVideos(lesson);
+  if(!videos.length)return {currentTime:0,duration:0,percent:0,lastPlayedAt:null,completed:false};
+  const rows=videos.map(v=>singleVideoProgress(db,user,lessonId,v.id));
+  const percent=Math.round(rows.reduce((n,p)=>n+(Number(p.percent)||0),0)/videos.length);
+  const latest=rows.filter(p=>p.lastPlayedAt).sort((a,b)=>new Date(b.lastPlayedAt)-new Date(a.lastPlayedAt))[0]||rows[0];
+  return {currentTime:latest.currentTime||0,duration:latest.duration||0,percent,lastPlayedAt:latest.lastPlayedAt||null,completed:rows.every(p=>p.completed)};
 }
 function canAccessLesson(db,user,lesson){
   if(user.role==='admin')return true;
@@ -334,6 +367,7 @@ function coursePayload(db, user, slug='peeling-quimico'){
     assessment:(()=>{const a=assessmentForScope(db,'module',m.id);return a&&a.status==='published'?{id:a.id,title:a.title,passingScore:a.passingScore,maxAttempts:a.maxAttempts}:null})(),
     lessons:db.lessons.filter(l=>l.moduleId===m.id && (user.role==='admin'||l.status==='published')).sort((a,b)=>a.position-b.position).map(l=>({
       ...l,
+      videos:lessonVideos(l).map(v=>({...v,progress:videoProgressPayload(db,user,l.id,v.id)})),
       videoProgress: videoProgressPayload(db,user,l.id),
       assessment:(()=>{const a=assessmentForScope(db,'lesson',l.id);return a&&a.status==='published'?{id:a.id,title:a.title,passingScore:a.passingScore,maxAttempts:a.maxAttempts}:null})()
     }))
@@ -1060,11 +1094,12 @@ export const handleRequest=async (req,res)=>{
       if(url.pathname==='/api/video/session' && req.method==='POST'){
         const body=await readBody(req); const lesson=db.lessons.find(l=>l.id===body.lessonId);
         if(!lesson || !canAccessLesson(db,user,lesson)) return json(res,403,{error:'Sin acceso a esta clase'});
-        if(!lesson.video) return json(res,404,{error:'Esta clase aún no tiene vídeo configurado'});
+        const videos=lessonVideos(lesson);const selected=body.videoId?videos.find(v=>v.id===body.videoId):videos[0];
+        if(!selected) return json(res,404,{error:'Esta clase aún no tiene vídeo configurado'});
         const expiresAt=Date.now()+VIDEO_TOKEN_TTL_MS;
         const token=signVideoToken({userId:user.id,lessonId:lesson.id,expiresAt});
         let streamUrl=`/api/video/stream?token=${encodeURIComponent(token)}`;
-        const ref=String(lesson.video||'');
+        const ref=String(selected.ref||'');
         if(ref.startsWith('blob:')){
           const pathname=ref.slice(5);
           const {issueSignedToken,presignUrl}=await import('@vercel/blob');
@@ -1072,17 +1107,18 @@ export const handleRequest=async (req,res)=>{
           const signed=await presignUrl(signedToken,{pathname,operation:'get',access:'private',validUntil:expiresAt});
           streamUrl=signed.presignedUrl;
         }
-        return json(res,200,{token,expiresAt,streamUrl,progress:videoProgressPayload(db,user,lesson.id)});
+        return json(res,200,{token,expiresAt,videoId:selected.id,name:selected.name,streamUrl,progress:videoProgressPayload(db,user,lesson.id,selected.id)});
       }
       if(url.pathname==='/api/video/progress' && req.method==='POST'){
         const body=await readBody(req); const lesson=db.lessons.find(l=>l.id===body.lessonId);
         if(!lesson || !canAccessLesson(db,user,lesson)) return json(res,403,{error:'Sin acceso a esta clase'});
+        const videos=lessonVideos(lesson);const selected=body.videoId?videos.find(v=>v.id===body.videoId):videos[0];if(!selected)return json(res,404,{error:'Vídeo no encontrado'});
         const currentTime=Math.max(0,Number(body.currentTime)||0), duration=Math.max(0,Number(body.duration)||0);
         const percent=duration>0?Math.min(100,Math.round(currentTime/duration*100)):0;
-        let vp=db.videoProgress.find(x=>x.userId===user.id&&x.lessonId===lesson.id);
-        if(!vp){vp={id:newId(),userId:user.id,lessonId:lesson.id,currentTime:0,duration:0,percent:0,completed:false,lastPlayedAt:null};db.videoProgress.push(vp)}
+        let vp=db.videoProgress.find(x=>x.userId===user.id&&x.lessonId===lesson.id&&String(x.videoId||'')===String(selected.id));
+        if(!vp){vp={id:newId(),userId:user.id,lessonId:lesson.id,videoId:selected.id,currentTime:0,duration:0,percent:0,completed:false,lastPlayedAt:null};db.videoProgress.push(vp)}
         vp.currentTime=currentTime; vp.duration=duration; vp.percent=Math.max(vp.percent||0,percent); vp.completed=vp.completed||percent>=90; vp.lastPlayedAt=now();
-        await writeDb(db); return json(res,200,{progress:videoProgressPayload(db,user,lesson.id)});
+        await writeDb(db); return json(res,200,{progress:videoProgressPayload(db,user,lesson.id,selected.id),lessonVideoProgress:videoProgressPayload(db,user,lesson.id)});
       }
       if(url.pathname==='/api/resource' && req.method==='GET'){
         const found=findResource(db,url.searchParams.get('id')); if(!found) return json(res,404,{error:'Recurso no encontrado'});
@@ -1111,7 +1147,7 @@ export const handleRequest=async (req,res)=>{
         }
         if(url.pathname==='/api/teacher/module'&&req.method==='POST'){const body=await readBody(req);if(!canTeachCourse(db,user,body.courseId))return json(res,403,{error:'Curso no asignado'});const course=db.courses.find(c=>c.id===body.courseId);if(!course)return json(res,404,{error:'Curso no encontrado'});const module={id:newId(),courseId:course.id,code:cleanText(body.code,30)||`M${positionOf(db.modules,m=>m.courseId===course.id)}`,title:cleanText(body.title,180),position:Number(body.position)||positionOf(db.modules,m=>m.courseId===course.id),status:safeStatus(body.status),createdAt:now(),updatedAt:now()};if(!module.title)return json(res,400,{error:'Título obligatorio'});db.modules.push(module);course.updatedAt=now();await writeDb(db);return json(res,201,{module});}
         const tm=url.pathname.match(/^\/api\/teacher\/module\/([^/]+)$/); if(tm){const module=db.modules.find(m=>m.id===tm[1]);if(!module)return json(res,404,{error:'Módulo no encontrado'});if(!canTeachCourse(db,user,module.courseId))return json(res,403,{error:'Curso no asignado'});if(req.method==='PUT'){const body=await readBody(req);module.code=cleanText(body.code??module.code,30);module.title=cleanText(body.title||module.title,180);module.position=Math.max(1,Number(body.position)||module.position);module.status=safeStatus(body.status??module.status);module.updatedAt=now();await writeDb(db);return json(res,200,{module});}}
-        if(url.pathname==='/api/teacher/lesson'&&req.method==='POST'){const body=await readBody(req);const module=db.modules.find(m=>m.id===body.moduleId);if(!module)return json(res,404,{error:'Módulo no encontrado'});if(!canTeachCourse(db,user,module.courseId))return json(res,403,{error:'Curso no asignado'});const lesson={id:newId(),moduleId:module.id,courseId:module.courseId,code:cleanText(body.code,30)||`${module.code}.${positionOf(db.lessons,l=>l.moduleId===module.id)}`,title:cleanText(body.title,180),summary:cleanText(body.summary,5000),position:Number(body.position)||positionOf(db.lessons,l=>l.moduleId===module.id),status:safeStatus(body.status),durationMinutes:Math.max(1,Number(body.durationMinutes)||10),video:body.video?cleanText(body.video,1000):null,resources:[],tutorApproved:false,tutorContent:cleanText(body.tutorContent,20000),tutorApprovedAt:null,createdAt:now(),updatedAt:now()};if(!lesson.title)return json(res,400,{error:'Título obligatorio'});db.lessons.push(lesson);await writeDb(db);return json(res,201,{lesson});}
+        if(url.pathname==='/api/teacher/lesson'&&req.method==='POST'){const body=await readBody(req);const module=db.modules.find(m=>m.id===body.moduleId);if(!module)return json(res,404,{error:'Módulo no encontrado'});if(!canTeachCourse(db,user,module.courseId))return json(res,403,{error:'Curso no asignado'});const lesson={id:newId(),moduleId:module.id,courseId:module.courseId,code:cleanText(body.code,30)||`${module.code}.${positionOf(db.lessons,l=>l.moduleId===module.id)}`,title:cleanText(body.title,180),summary:cleanText(body.summary,5000),position:Number(body.position)||positionOf(db.lessons,l=>l.moduleId===module.id),status:safeStatus(body.status),durationMinutes:Math.max(1,Number(body.durationMinutes)||10),video:body.video?cleanText(body.video,1000):null,videos:body.video?[{id:newId(),ref:cleanText(body.video,1000),name:'Vídeo 1',mime:'video/mp4',size:null,position:1,createdAt:now()}]:[],resources:[],tutorApproved:false,tutorContent:cleanText(body.tutorContent,20000),tutorApprovedAt:null,createdAt:now(),updatedAt:now()};if(!lesson.title)return json(res,400,{error:'Título obligatorio'});db.lessons.push(lesson);await writeDb(db);return json(res,201,{lesson});}
         const tl=url.pathname.match(/^\/api\/teacher\/lesson\/([^/]+)$/); if(tl){const lesson=db.lessons.find(l=>l.id===tl[1]);if(!lesson)return json(res,404,{error:'Clase no encontrada'});if(!canTeachCourse(db,user,lesson.courseId))return json(res,403,{error:'Curso no asignado'});if(req.method==='PUT'){const body=await readBody(req);lesson.code=cleanText(body.code??lesson.code,30);lesson.title=cleanText(body.title||lesson.title,180);lesson.summary=cleanText(body.summary??lesson.summary,5000);lesson.position=Math.max(1,Number(body.position)||lesson.position);lesson.status=safeStatus(body.status??lesson.status);lesson.durationMinutes=Math.max(1,Number(body.durationMinutes)||lesson.durationMinutes);lesson.video=body.video===null?null:cleanText(body.video??lesson.video,1000)||null;if(body.tutorContent!==undefined){const nextTutor=cleanText(body.tutorContent,20000);if(nextTutor!==lesson.tutorContent){lesson.tutorContent=nextTutor;lesson.tutorApproved=false;lesson.tutorApprovedAt=null;}}lesson.updatedAt=now();await writeDb(db);return json(res,200,{lesson});}}
         if(url.pathname==='/api/teacher/resource'&&req.method==='POST'){const body=await readBody(req);const lesson=db.lessons.find(l=>l.id===body.lessonId);if(!lesson)return json(res,404,{error:'Clase no encontrada'});if(!canTeachCourse(db,user,lesson.courseId))return json(res,403,{error:'Curso no asignado'});const name=cleanText(body.name,220),data=String(body.dataBase64||''),mimeType=safeResourceMime(body.mime);if(!name||!data)return json(res,400,{error:'Archivo incompleto'});if(!mimeType)return json(res,415,{error:'Tipo de archivo no permitido'});const buf=Buffer.from(data,'base64');if(!buf.length||buf.length>MAX_RESOURCE_BYTES)return json(res,413,{error:'Máximo 6 MB'});const ext=path.extname(name).slice(0,10).replace(/[^.a-zA-Z0-9]/g,'');const storageName=`${newId()}${ext}`;const storageRef=await resourceStore.save(storageName,buf,mimeType);const resource={id:newId(),name,mime:mimeType,size:buf.length,storageName:storageRef,createdAt:now()};lesson.resources||=[];lesson.resources.push(resource);await writeDb(db);return json(res,201,{resource});}
         return json(res,404,{error:'Endpoint docente no encontrado'});
@@ -1179,7 +1215,7 @@ export const handleRequest=async (req,res)=>{
           if(req.method==='PUT'){const body=await readBody(req);course.title=cleanText(body.title||course.title,160);course.subtitle=cleanText(body.subtitle??course.subtitle,220);course.description=cleanText(body.description??course.description,5000);course.slug=uniqueSlug(db,body.slug||course.slug,course.id);course.status=safeStatus(body.status??course.status);course.certificateEnabled=body.certificateEnabled!==false;course.updatedAt=now();await writeDb(db);return json(res,200,{course});}
           if(req.method==='DELETE'){
             if(db.enrollments.some(e=>e.courseId===course.id)) return json(res,409,{error:'No se puede eliminar un curso con matrículas. Puedes despublicarlo.'});
-            const lessonIds=db.lessons.filter(l=>l.courseId===course.id).map(l=>l.id);for(const l of db.lessons.filter(l=>lessonIds.includes(l.id)))for(const r of l.resources||[])await deleteResourceFile(r);
+            const lessonIds=db.lessons.filter(l=>l.courseId===course.id).map(l=>l.id);for(const l of db.lessons.filter(l=>lessonIds.includes(l.id))){for(const r of l.resources||[])await deleteResourceFile(r);for(const v of lessonVideos(l)){if(String(v.ref||'').startsWith('blob:')){try{await resourceStore.remove(String(v.ref).slice(5));}catch{}}}}
             const moduleIds=db.modules.filter(m=>m.courseId===course.id).map(m=>m.id);const assessmentIds=db.assessments.filter(a=>(a.scopeType==='module'&&moduleIds.includes(a.scopeId))||(a.scopeType==='lesson'&&lessonIds.includes(a.scopeId))).map(a=>a.id);db.questions=db.questions.filter(q=>!assessmentIds.includes(q.assessmentId));db.attempts=db.attempts.filter(a=>!assessmentIds.includes(a.assessmentId));db.assessments=db.assessments.filter(a=>!assessmentIds.includes(a.id));db.progress=db.progress.filter(p=>!lessonIds.includes(p.lessonId));db.lessons=db.lessons.filter(l=>l.courseId!==course.id);db.modules=db.modules.filter(m=>m.courseId!==course.id);db.courses=db.courses.filter(c=>c.id!==course.id);await writeDb(db);return json(res,200,{ok:true});
           }
         }
@@ -1203,7 +1239,7 @@ export const handleRequest=async (req,res)=>{
         if(lessonMatch){
           const lesson=db.lessons.find(l=>l.id===lessonMatch[1]);if(!lesson)return json(res,404,{error:'Clase no encontrada'});
           if(req.method==='PUT'){const body=await readBody(req);lesson.code=cleanText(body.code??lesson.code,30);lesson.title=cleanText(body.title||lesson.title,180);lesson.summary=cleanText(body.summary??lesson.summary,5000);lesson.position=Math.max(1,Number(body.position)||lesson.position);lesson.status=safeStatus(body.status??lesson.status);lesson.durationMinutes=Math.max(1,Number(body.durationMinutes)||lesson.durationMinutes);lesson.video=body.video===null?null:cleanText(body.video??lesson.video,1000)||null;if(body.tutorContent!==undefined)lesson.tutorContent=cleanText(body.tutorContent,20000);if(body.tutorApproved!==undefined){lesson.tutorApproved=Boolean(body.tutorApproved);lesson.tutorApprovedAt=lesson.tutorApproved?now():null;}lesson.updatedAt=now();const course=db.courses.find(c=>c.id===lesson.courseId);if(course)course.updatedAt=now();await writeDb(db);return json(res,200,{lesson});}
-          if(req.method==='DELETE'){for(const r of lesson.resources||[])await deleteResourceFile(r);const assessmentIds=db.assessments.filter(a=>a.scopeType==='lesson'&&a.scopeId===lesson.id).map(a=>a.id);db.questions=db.questions.filter(q=>!assessmentIds.includes(q.assessmentId));db.attempts=db.attempts.filter(a=>!assessmentIds.includes(a.assessmentId));db.assessments=db.assessments.filter(a=>!assessmentIds.includes(a.id));db.progress=db.progress.filter(p=>p.lessonId!==lesson.id);db.videoProgress=db.videoProgress.filter(v=>v.lessonId!==lesson.id);db.lessons=db.lessons.filter(l=>l.id!==lesson.id);await writeDb(db);return json(res,200,{ok:true});}
+          if(req.method==='DELETE'){for(const r of lesson.resources||[])await deleteResourceFile(r);for(const v of lessonVideos(lesson)){if(String(v.ref||'').startsWith('blob:')){try{await resourceStore.remove(String(v.ref).slice(5));}catch{}}}const assessmentIds=db.assessments.filter(a=>a.scopeType==='lesson'&&a.scopeId===lesson.id).map(a=>a.id);db.questions=db.questions.filter(q=>!assessmentIds.includes(q.assessmentId));db.attempts=db.attempts.filter(a=>!assessmentIds.includes(a.assessmentId));db.assessments=db.assessments.filter(a=>!assessmentIds.includes(a.id));db.progress=db.progress.filter(p=>p.lessonId!==lesson.id);db.videoProgress=db.videoProgress.filter(v=>v.lessonId!==lesson.id);db.lessons=db.lessons.filter(l=>l.id!==lesson.id);await writeDb(db);return json(res,200,{ok:true});}
         }
 
 
@@ -1252,7 +1288,8 @@ export const handleRequest=async (req,res)=>{
           const {issueSignedToken,presignUrl}=await import('@vercel/blob');
           const signedToken=await issueSignedToken({pathname,operations:['put'],validUntil:expiresAt,allowedContentTypes:[mime],maximumSizeInBytes:MAX_VIDEO_BYTES});
           const signed=await presignUrl(signedToken,{pathname,operation:'put',access:'private',validUntil:expiresAt,allowedContentTypes:[mime],maximumSizeInBytes:MAX_VIDEO_BYTES,addRandomSuffix:false,allowOverwrite:false});
-          const ticket=signVideoUploadTicket({lessonId:lesson.id,pathname,name,mime,size,expiresAt});
+          const mode=body.mode==='replace'?'replace':'add';const replaceVideoId=cleanText(body.videoId,120)||null;
+          const ticket=signVideoUploadTicket({lessonId:lesson.id,pathname,name,mime,size,mode,replaceVideoId,expiresAt});
           return json(res,200,{uploadUrl:signed.presignedUrl,ticket,expiresAt});
         }
         if(url.pathname==='/api/admin/video/complete' && req.method==='POST'){
@@ -1261,9 +1298,18 @@ export const handleRequest=async (req,res)=>{
           const {head}=await import('@vercel/blob');
           let blobMeta;
           try{blobMeta=await head(claims.pathname);}catch{return json(res,409,{error:'El archivo todavía no está disponible en Blob'})}
-          if(String(lesson.video||'').startsWith('blob:')){const oldRef=String(lesson.video).slice(5);if(oldRef!==claims.pathname){try{await resourceStore.remove(oldRef);}catch{}}}
-          lesson.video=`blob:${claims.pathname}`;lesson.videoMime=claims.mime;lesson.videoName=claims.name;lesson.videoSize=Number(blobMeta?.size)||Number(claims.size)||null;lesson.updatedAt=now();
-          await writeDb(db);return json(res,201,{ok:true,video:{name:lesson.videoName,mime:lesson.videoMime,size:lesson.videoSize}});
+          lesson.videos=lessonVideos(lesson);
+          const nextVideo={id:newId(),ref:`blob:${claims.pathname}`,name:claims.name,mime:claims.mime,size:Number(blobMeta?.size)||Number(claims.size)||null,position:lesson.videos.length+1,createdAt:now()};
+          let oldRef=null;
+          if(claims.mode==='replace'){
+            const idx=Math.max(0,lesson.videos.findIndex(v=>v.id===claims.replaceVideoId));
+            const previous=lesson.videos[idx];if(previous){nextVideo.id=previous.id;nextVideo.position=previous.position||idx+1;oldRef=previous.ref||null;lesson.videos[idx]=nextVideo;}else lesson.videos.push(nextVideo);
+          }else lesson.videos.push(nextVideo);
+          lesson.videos.sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0)).forEach((v,i)=>v.position=i+1);
+          syncPrimaryVideoFields(lesson);lesson.updatedAt=now();
+          await writeDb(db);
+          if(oldRef&&oldRef!==nextVideo.ref&&String(oldRef).startsWith('blob:')){try{await resourceStore.remove(String(oldRef).slice(5));}catch{}}
+          return json(res,201,{ok:true,video:nextVideo,videos:lesson.videos});
         }
 
         if(url.pathname==='/api/admin/video' && req.method==='POST'){
@@ -1281,8 +1327,10 @@ export const handleRequest=async (req,res)=>{
         const videoDeleteMatch=url.pathname.match(/^\/api\/admin\/video\/([^/]+)$/);
         if(videoDeleteMatch&&req.method==='DELETE'){
           const lesson=db.lessons.find(l=>l.id===videoDeleteMatch[1]);if(!lesson)return json(res,404,{error:'Clase no encontrada'});
-          if(String(lesson.video||'').startsWith('blob:')){try{await resourceStore.remove(String(lesson.video).slice(5));}catch{}}
-          lesson.video=null;lesson.videoMime=null;lesson.videoName=null;lesson.updatedAt=now();await writeDb(db);return json(res,200,{ok:true});
+          lesson.videos=lessonVideos(lesson);const requested=url.searchParams.get('videoId');const target=requested?lesson.videos.find(v=>v.id===requested):lesson.videos[0];if(!target)return json(res,404,{error:'Vídeo no encontrado'});
+          if(String(target.ref||'').startsWith('blob:')){try{await resourceStore.remove(String(target.ref).slice(5));}catch{}}
+          lesson.videos=lesson.videos.filter(v=>v.id!==target.id).map((v,i)=>({...v,position:i+1}));db.videoProgress=db.videoProgress.filter(v=>!(v.lessonId===lesson.id&&String(v.videoId||'')===String(target.id)));
+          syncPrimaryVideoFields(lesson);lesson.updatedAt=now();await writeDb(db);return json(res,200,{ok:true,videos:lesson.videos});
         }
 
         if(url.pathname==='/api/admin/resource' && req.method==='POST'){
