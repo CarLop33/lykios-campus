@@ -645,8 +645,8 @@ async function certificatePdf(cert){
     page.drawImage(sig,{x:105,y:67,width:245,height:89});
   }catch{}
   page.drawLine({start:{x:105,y:67},end:{x:350,y:67},thickness:.8,color:gold});
-  centered('Dr. Carlos López Scovino',timesBold,10.5,51,ink,230);
-  centered('Director Académico · Lykios Academy',helv,8.6,37,muted,240);
+  leftFit('Dr. Carlos López Scovino',timesBold,10.5,122,51,220,ink);
+  leftFit('Director Académico · Lykios Academy',helv,8.6,122,37,230,muted);
 
   const verifyOrigin=(process.env.LYKIOS_PUBLIC_ORIGIN||process.env.LYKIOS_APP_ORIGIN||APP_ORIGIN).replace(/\/$/,'');
   const verifyUrl=`${verifyOrigin}/verify/${cert.code}`;
@@ -659,7 +659,7 @@ async function certificatePdf(cert){
     const qr=await pdf.embedPng(await qrPng(verifyUrl));
     page.drawRectangle({x:718,y:66,width:82,height:82,color:rgb(1,1,1),borderColor:gold,borderWidth:.8});
     page.drawImage(qr,{x:724,y:72,width:70,height:70});
-    centered('ESCANEA PARA VERIFICAR',helv,5.8,55,muted,150);
+    leftFit('ESCANEA PARA VERIFICAR',helv,5.8,716,55,90,muted);
   }catch{}
 
   spaced('CONOCIMIENTO QUE TRANSFORMA VIDAS',helv,6.5,292,18,2.25,gold);
