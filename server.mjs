@@ -581,46 +581,95 @@ function publicCertificate(db,cert){
   if(!user||!course) return null;
   return {code:cert.code,status:cert.status||'valid',studentName:`${user.firstName} ${user.lastName}`.trim(),courseTitle:course.title,courseSubtitle:course.subtitle||'',issuedAt:cert.issuedAt,revokedAt:cert.revokedAt||null,issuer:'Lykios Academy',verificationPath:`/verify/${cert.code}`};
 }
-function pdfEscape(v=''){ return String(v).replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)'); }
-function certificatePdf(cert){
-  const lines=[];
-  const txt=(x,y,size,text,font='F1')=>lines.push(`BT /${font} ${size} Tf ${x} ${y} Td (${pdfEscape(text)}) Tj ET`);
-  lines.push('0.02 0.24 0.28 rg 0 0 842 595 re f');
-  lines.push('0.99 1 1 rg 24 24 794 547 re f');
-  lines.push('0.78 0.66 0.43 RG 2 w 40 40 762 515 re S');
-  lines.push('0.20 0.62 0.65 RG 1 w 56 56 730 483 re S');
-  lines.push('0.04 0.16 0.18 rg');
-  txt(78,505,16,'LYKIOS ACADEMY','F2');
-  txt(78,477,9,'FORMACIÓN MÉDICA Y PROFESIONAL','F1');
-  txt(78,433,13,'CERTIFICADO DE FINALIZACIÓN','F2');
-  txt(78,394,11,'Se certifica que','F1');
-  txt(78,354,29,cert.studentName,'F2');
-  txt(78,319,11,'ha completado satisfactoriamente el curso','F1');
-  txt(78,282,21,cert.courseTitle,'F2');
-  if(cert.courseSubtitle)txt(78,258,10,cert.courseSubtitle,'F1');
-  txt(78,216,10,`Fecha de emisión: ${new Date(cert.issuedAt).toLocaleDateString('es-ES')}`,'F1');
-  txt(78,195,10,`Código de verificación: ${cert.code}`,'F2');
-  txt(78,174,9,`Verificación pública: campus.lykiosacademy.com/verify/${cert.code}`,'F1');
-  lines.push('0.78 0.66 0.43 RG 1 w 78 118 220 0 re S');
-  txt(78,98,10,'Dr. Carlos López Scovino','F2');
-  txt(78,82,9,'Dirección académica · Lykios Academy','F1');
-  txt(500,98,9,'Documento verificable mediante código único','F1');
-  txt(500,82,8,'Emitido por Lykios Academy','F1');
-  const stream=lines.join('\n');
-  const objs=[];
-  objs[1]='<< /Type /Catalog /Pages 2 0 R >>';
-  objs[2]='<< /Type /Pages /Kids [3 0 R] /Count 1 >>';
-  objs[3]='<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>';
-  objs[4]='<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
-  objs[5]='<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
-  objs[6]=`<< /Length ${Buffer.byteLength(stream,'latin1')} >>\nstream\n${stream}\nendstream`;
-  let out='%PDF-1.4\n'; const offsets=[0];
-  for(let i=1;i<=6;i++){offsets[i]=Buffer.byteLength(out,'latin1');out+=`${i} 0 obj\n${objs[i]}\nendobj\n`;}
-  const xref=Buffer.byteLength(out,'latin1'); out+=`xref\n0 7\n0000000000 65535 f \n`;
-  for(let i=1;i<=6;i++)out+=String(offsets[i]).padStart(10,'0')+' 00000 n \n';
-  out+=`trailer << /Size 7 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
-  return Buffer.from(out,'latin1');
+const CERT_SIGNATURE_PNG=Buffer.from('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','base64');
+async function certificatePdf(cert){
+  const {PDFDocument,StandardFonts,rgb}=await import('pdf-lib');
+  const pdf=await PDFDocument.create();
+  const page=pdf.addPage([842,595]);
+  const W=842,H=595;
+  const cream=rgb(0.992,0.988,0.972),teal=rgb(0.02,0.24,0.28),teal2=rgb(0.02,0.55,0.58),gold=rgb(0.76,0.58,0.24),ink=rgb(0.035,0.12,0.15),muted=rgb(0.29,0.37,0.39),pale=rgb(0.80,0.94,0.93);
+  page.drawRectangle({x:0,y:0,width:W,height:H,color:cream});
+  page.drawRectangle({x:11,y:11,width:820,height:573,borderColor:gold,borderWidth:1.8});
+  page.drawRectangle({x:19,y:19,width:804,height:557,borderColor:teal,borderWidth:.7});
+  page.drawRectangle({x:27,y:27,width:788,height:541,borderColor:gold,borderWidth:.55,opacity:.65});
+  page.drawSvgPath('M 842 595 L 690 595 C 752 573 796 548 842 505 Z',{color:teal,opacity:.98});
+  page.drawSvgPath('M 842 595 L 745 595 C 790 579 814 558 842 532 Z',{color:gold,opacity:.95});
+  page.drawSvgPath('M 0 0 L 178 0 C 104 28 49 69 0 136 Z',{color:teal,opacity:.98});
+  page.drawSvgPath('M 0 0 L 115 0 C 68 20 30 48 0 90 Z',{color:gold,opacity:.95});
+  page.drawSvgPath('M 75 365 L 75 200 C 75 174 93 157 118 157 L 205 157 L 176 185 L 121 185 C 110 185 102 193 102 204 L 102 365 Z',{color:pale,opacity:.48});
+
+  const helv=await pdf.embedFont(StandardFonts.Helvetica);
+  const helvBold=await pdf.embedFont(StandardFonts.HelveticaBold);
+  const times=await pdf.embedFont(StandardFonts.TimesRoman);
+  const timesBold=await pdf.embedFont(StandardFonts.TimesRomanBold);
+  const centered=(text,font,size,y,color=ink,maxWidth=740)=>{
+    let s=size; while(s>8&&font.widthOfTextAtSize(String(text),s)>maxWidth)s-=.5;
+    const w=font.widthOfTextAtSize(String(text),s); page.drawText(String(text),{x:(W-w)/2,y,size:s,font,color}); return s;
+  };
+  const leftFit=(text,font,size,x,y,maxWidth,color=ink)=>{
+    let s=size; while(s>7&&font.widthOfTextAtSize(String(text),s)>maxWidth)s-=.5;
+    page.drawText(String(text),{x,y,size:s,font,color}); return s;
+  };
+  const spaced=(text,font,size,x,y,spacing,color=ink)=>{
+    let cx=x; for(const ch of String(text)){page.drawText(ch,{x:cx,y,size,font,color});cx+=font.widthOfTextAtSize(ch,size)+spacing;}
+  };
+
+  page.drawSvgPath('M 0 52 L 0 0 C 0 -12 10 -22 22 -22 L 66 -22 L 45 0 L 23 0 L 23 52 Z',{x:409,y:532,scale:.65,color:teal2});
+  page.drawSvgPath('M 0 18 L 30 -12 L 67 -12 L 48 7 L 22 7 Z',{x:414,y:525,scale:.62,color:teal,opacity:.96});
+  centered('LYKIOS',helvBold,20,514,ink,250);
+  spaced('ACADEMY',helv,9,380,498,4.1,teal2);
+
+  spaced('FORMACIÓN MÉDICA',helv,6.6,61,520,1.8,teal);
+  spaced('PARA UN FUTURO',helv,6.6,61,508,1.8,teal);
+  spaced('MÁS HUMANO',helv,6.6,61,496,1.8,teal);
+  page.drawLine({start:{x:61,y:482},end:{x:108,y:482},thickness:1,color:gold});
+  spaced('CIENCIA',helv,6.6,708,520,1.8,teal);
+  spaced('PRÁCTICA',helv,6.6,708,508,1.8,teal);
+  spaced('EXPERIENCIA',helv,6.6,708,496,1.8,teal);
+  spaced('RESULTADOS',helv,6.6,708,484,1.8,teal);
+  page.drawLine({start:{x:708,y:470},end:{x:748,y:470},thickness:1,color:gold});
+
+  centered('CERTIFICADO DE FINALIZACIÓN',timesBold,29,447,ink,650);
+  centered('LYKIOS ACADEMY CERTIFICA QUE',helv,9.5,420,teal,420);
+  centered(cert.studentName,timesBold,34,370,ink,620);
+  page.drawLine({start:{x:270,y:356},end:{x:572,y:356},thickness:1,color:gold});
+  centered('HA COMPLETADO SATISFACTORIAMENTE EL CURSO',helv,8.8,331,ink,470);
+  centered(cert.courseTitle,timesBold,25,294,teal,700);
+  if(cert.courseSubtitle)centered(cert.courseSubtitle,helv,11,273,teal,620);
+  centered('Tras completar el programa formativo y superar los requisitos académicos correspondientes,',helv,9.2,238,muted,650);
+  centered('se expide el presente certificado.',helv,9.2,223,muted,650);
+  centered(new Date(cert.issuedAt).toLocaleDateString('es-ES',{day:'2-digit',month:'long',year:'numeric'}),helv,10.3,195,ink,260);
+
+  try{
+    const sig=await pdf.embedPng(CERT_SIGNATURE_PNG);
+    page.drawImage(sig,{x:105,y:67,width:245,height:89});
+  }catch{}
+  page.drawLine({start:{x:105,y:67},end:{x:350,y:67},thickness:.8,color:gold});
+  centered('Dr. Carlos López Scovino',timesBold,10.5,51,ink,230);
+  centered('Director Académico · Lykios Academy',helv,8.6,37,muted,240);
+
+  const verifyOrigin=(process.env.LYKIOS_PUBLIC_ORIGIN||process.env.LYKIOS_APP_ORIGIN||APP_ORIGIN).replace(/\/$/,'');
+  const verifyUrl=`${verifyOrigin}/verify/${cert.code}`;
+  page.drawLine({start:{x:515,y:63},end:{x:515,y:151},thickness:1,color:gold});
+  leftFit('CÓDIGO DE VERIFICACIÓN',helvBold,7.5,531,139,165,ink);
+  leftFit(cert.code,helvBold,10.5,531,122,165,ink);
+  page.drawText('Verifica la autenticidad en',{x:531,y:99,size:7.5,font:helv,color:muted});
+  leftFit(verifyUrl.replace(/^https?:\/\//,''),helv,7.2,531,85,185,teal,);
+  try{
+    const qr=await pdf.embedPng(await qrPng(verifyUrl));
+    page.drawRectangle({x:718,y:66,width:82,height:82,color:rgb(1,1,1),borderColor:gold,borderWidth:.8});
+    page.drawImage(qr,{x:724,y:72,width:70,height:70});
+    centered('ESCANEA PARA VERIFICAR',helv,5.8,55,muted,150);
+  }catch{}
+
+  spaced('CONOCIMIENTO QUE TRANSFORMA VIDAS',helv,6.5,292,18,2.25,gold);
+  page.drawLine({start:{x:250,y:21},end:{x:280,y:21},thickness:.8,color:gold});
+  page.drawLine({start:{x:561,y:21},end:{x:591,y:21},thickness:.8,color:gold});
+
+  const bytes=await pdf.save({useObjectStreams:false});
+  return Buffer.from(bytes);
 }
+
 async function qrPng(data){
   if(process.env.VERCEL){
     const QRCode=await import('qrcode');
@@ -763,7 +812,7 @@ function mailTemplate(type,ctx={}){
     welcome:{subject:'Bienvenido a Lykios Academy',html:`<h1>Bienvenido, ${firstName}</h1><p>Tu cuenta de Lykios Academy ya está activa.</p><p>Desde tu campus podrás acceder a tus cursos, progreso, evaluaciones y certificados.</p>`},
     purchase:{subject:`Matrícula confirmada · ${course}`,html:`<h1>Matrícula confirmada</h1><p>Hola ${firstName}, tu acceso a <b>${course}</b> ya está activo.</p><p>Pedido: <b>${order}</b></p><p>Puedes entrar al campus y comenzar cuando quieras.</p>`},
     password_reset:{subject:'Recupera tu acceso a Lykios Academy',html:`<h1>Recuperar contraseña</h1><p>Hola ${firstName}. Hemos recibido una solicitud para restablecer tu contraseña.</p><p><a href="${resetUrl}">Crear nueva contraseña</a></p><p>Este enlace caduca en 60 minutos.</p>`},
-    course_completed:{subject:`Curso completado · ${course}`,html:`<h1>Curso completado</h1><p>Enhorabuena, ${firstName}. Has completado <b>${course}</b>.</p><p>Si has superado todas las evaluaciones obligatorias, ya puedes emitir tu certificado desde el campus.</p>`},
+    course_completed:{subject:`Curso completado · ${course}`,html:`<h1>Curso completado</h1><p>Enhorabuena, ${firstName}. Has completado satisfactoriamente <b>${course}</b>.</p><p>Tu certificado Lykios se genera automáticamente y queda disponible en tu campus para descargarlo y verificarlo.</p>`},
     certificate:{subject:`Tu certificado Lykios · ${course}`,html:`<h1>Certificado emitido</h1><p>Hola ${firstName}. Tu certificado de <b>${course}</b> ya está disponible.</p><p>Código: <b>${code}</b></p><p>Puedes descargarlo y verificarlo desde tu campus.</p>`},
     reminder:{subject:`Continúa tu formación · ${course}`,html:`<h1>Tu curso te espera</h1><p>Hola ${firstName}. Tienes pendiente continuar <b>${course}</b>.</p><p>Entra en Lykios Academy y retoma la siguiente clase cuando te venga bien.</p>`}
   };
@@ -785,9 +834,16 @@ function maybeQueueCourseCompleted(db,user,courseId){
   const course=db.courses.find(c=>c.id===courseId); if(!course) return null;
   const completion=courseCompletionStatus(db,user,courseId);
   if(!completion.eligible) return null;
-  const already=(db.emailOutbox||[]).some(e=>e.userId===user.id&&e.courseId===courseId&&e.type==='course_completed');
-  if(already) return null;
-  return queueEmail(db,{to:user.email,type:'course_completed',userId:user.id,courseId});
+  const alreadyCompleted=(db.emailOutbox||[]).some(e=>e.userId===user.id&&e.courseId===courseId&&e.type==='course_completed');
+  if(!alreadyCompleted)queueEmail(db,{to:user.email,type:'course_completed',userId:user.id,courseId});
+  let cert=db.certificates.find(c=>c.userId===user.id&&c.courseId===courseId&&c.status!=='revoked');
+  if(course.certificateEnabled!==false&&!cert){
+    cert={id:newId(),code:certificateCode(),userId:user.id,courseId,status:'valid',issuedAt:now(),createdAt:now()};
+    db.certificates.push(cert);
+    db.activity.push({id:newId(),userId:user.id,type:'certificate_issued',label:`Certificado emitido automáticamente: ${course.title}`,at:now()});
+    queueEmail(db,{to:user.email,type:'certificate',userId:user.id,courseId,meta:{certificateCode:cert.code}});
+  }
+  return cert;
 }
 
 function money(cents=0,currency='EUR'){return new Intl.NumberFormat('es-ES',{style:'currency',currency}).format((Number(cents)||0)/100)}
@@ -1188,7 +1244,7 @@ export const handleRequest=async (req,res)=>{
       }
       if(url.pathname==='/api/certificate/pdf' && req.method==='GET'){
         const code=String(url.searchParams.get('code')||'').toUpperCase(); const cert=db.certificates.find(c=>c.code===code); if(!cert)return json(res,404,{error:'Certificado no encontrado'});
-        if(user.role!=='admin'&&cert.userId!==user.id)return json(res,403,{error:'Sin acceso'}); const payload=publicCertificate(db,cert); const buf=certificatePdf(payload);
+        if(user.role!=='admin'&&cert.userId!==user.id)return json(res,403,{error:'Sin acceso'}); const payload=publicCertificate(db,cert); const buf=await certificatePdf(payload);
         return text(res,200,buf,'application/pdf',{'content-disposition':`attachment; filename="Certificado-Lykios-${cert.code}.pdf"`});
       }
 
@@ -1290,7 +1346,7 @@ export const handleRequest=async (req,res)=>{
           const course=db.courses.find(c=>c.id===url.searchParams.get('courseId'))||db.courses.find(c=>c.slug==='peeling-quimico')||db.courses[0];
           if(!course)return json(res,404,{error:'No hay cursos disponibles'});
           const sample={code:'LYK-2026-VISTA-PREVIA',status:'valid',studentName:'Alumno de prueba',courseTitle:course.title,courseSubtitle:course.subtitle||'',issuedAt:now(),issuer:'Lykios Academy',verificationPath:'/verify/LYK-2026-VISTA-PREVIA'};
-          const buf=certificatePdf(sample);
+          const buf=await certificatePdf(sample);
           return text(res,200,buf,'application/pdf',{'content-disposition':'inline; filename="Vista-previa-certificado-Lykios.pdf"','cache-control':'no-store'});
         }
         if(url.pathname==='/api/admin/certificates' && req.method==='GET') return json(res,200,{certificates:db.certificates.slice().sort((a,b)=>new Date(b.issuedAt)-new Date(a.issuedAt)).map(c=>({id:c.id,...publicCertificate(db,c)}))});
