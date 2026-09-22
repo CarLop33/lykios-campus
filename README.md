@@ -12,3 +12,5 @@ LMS propio de Lykios Academy. Paquete RC5 preparado para Vercel serverless.
 Lee `DEPLOY-VERCEL.md` antes de importar el proyecto.
 
 Preview redeploy after env sync.
+
+Preview redeploy after admin credential reset.
