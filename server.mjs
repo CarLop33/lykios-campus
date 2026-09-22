@@ -195,6 +195,24 @@ async function readDb(){
     });
     db.meta.schemaVersion=14; changed=true;
   }
+  if ((db.meta?.schemaVersion||1) < 15) {
+    const course11=db.courses.find(c=>c.slug==='peeling-quimico');
+    const lesson11=course11?db.lessons.find(l=>l.courseId===course11.id&&l.code==='1.1'):null;
+    if(lesson11&&!assessmentForScope(db,'lesson',lesson11.id)){
+      const assessment={id:newId(),scopeType:'lesson',scopeId:lesson11.id,title:'Evaluación 1.1 · Anatomía e histología cutánea',instructions:'Selecciona una sola respuesta en cada pregunta. Cada acierto vale 1 punto.',passingScore:80,maxAttempts:3,status:'published',createdAt:now(),updatedAt:now()};
+      db.assessments.push(assessment);
+      const seedQuestions=[
+        {prompt:'¿Cuál es la capa más superficial de la piel?',options:['Dermis.','Epidermis.','Hipodermis.','Tejido muscular.'],correctOption:1,explanation:'La epidermis es la capa más superficial de la piel.'},
+        {prompt:'¿Qué células producen la melanina?',options:['Fibroblastos.','Células de Merkel.','Melanocitos.','Células de Langerhans.'],correctOption:2,explanation:'Los melanocitos producen melanina y transfieren melanosomas a los queratinocitos.'},
+        {prompt:'¿Cuál de estas afirmaciones sobre la epidermis es correcta?',options:['No contiene vasos sanguíneos.','Está formada principalmente por tejido adiposo.','Se encuentra debajo de la dermis.','Carece de terminaciones nerviosas.'],correctOption:0,explanation:'La epidermis es avascular; recibe nutrientes por difusión desde la dermis.'},
+        {prompt:'¿A qué capa pertenece el estrato basal?',options:['A la dermis papilar.','A la dermis reticular.','A la hipodermis.','A la epidermis.'],correctOption:3,explanation:'El estrato basal es la zona más profunda de la epidermis.'},
+        {prompt:'¿Qué estructuras pueden aportar células para recuperar la superficie cutánea después de una lesión?',options:['Los adipocitos de la hipodermis.','Los epitelios conservados de la epidermis y de los anexos.','Las fibras de colágeno de la dermis.','El músculo erector del pelo.'],correctOption:1,explanation:'Los epitelios que permanecen viables en la epidermis y en los anexos pueden contribuir a la reepitelización.'}
+      ];
+      seedQuestions.forEach((q,i)=>db.questions.push({id:newId(),assessmentId:assessment.id,prompt:q.prompt,type:'single_choice',options:q.options,correctOption:q.correctOption,explanation:q.explanation,position:i+1,createdAt:now(),updatedAt:now()}));
+      reconcileLessonForStudents(db,lesson11);
+    }
+    db.meta.schemaVersion=15; changed=true;
+  }
   if (db.meta?.tutorPolicy) { const days=Math.max(0,Number(db.meta.tutorPolicy.retainQueriesDays)||0); if(days>0 && Array.isArray(db.tutorQueries)){ const cutoff=Date.now()-days*86400000; const before=db.tutorQueries.length; db.tutorQueries=db.tutorQueries.filter(q=>new Date(q.createdAt).getTime()>=cutoff); if(db.tutorQueries.length!==before) changed=true; } }
   if(changed) await writeDb(db);
   return db;
@@ -228,7 +246,7 @@ async function seedDb(){
   const enrollmentId = newId();
   const completedCodes = ['1.1','1.2','1.3','1.4','2.1','2.2'];
   const db = {
-    meta:{ schemaVersion:14, createdAt:now(), app:'Lykios LMS', tutorPolicy:{retainQueriesDays:30,storeQuestionText:true,feedbackEnabled:true} },
+    meta:{ schemaVersion:15, createdAt:now(), app:'Lykios LMS', tutorPolicy:{retainQueriesDays:30,storeQuestionText:true,feedbackEnabled:true} },
     users: IS_PROD ? [
       { id:adminId, email:String(ADMIN_EMAIL).toLowerCase(), firstName:'Lykios', lastName:'Admin', role:'admin', status:'active', lastLoginAt:null, passwordSalt:adminPass.salt, passwordHash:adminPass.hash, createdAt:now() }
     ] : [
@@ -505,8 +523,8 @@ function assessmentForScope(db,scopeType,scopeId){
 function assessmentPayload(db,assessment,{includeAnswers=false,userId=null}={}){
   if(!assessment) return null;
   const questions=db.questions.filter(q=>q.assessmentId===assessment.id).sort((a,b)=>a.position-b.position).map(q=>({
-    id:q.id, assessmentId:q.assessmentId, prompt:q.prompt, type:q.type, options:q.options, position:q.position, explanation:q.explanation||'',
-    ...(includeAnswers?{correctOption:q.correctOption}:{})
+    id:q.id, assessmentId:q.assessmentId, prompt:q.prompt, type:q.type, options:q.options, position:q.position,
+    ...(includeAnswers?{correctOption:q.correctOption,explanation:q.explanation||''}:{})
   }));
   const attempts=userId?db.attempts.filter(a=>a.assessmentId===assessment.id&&a.userId===userId).sort((a,b)=>new Date(b.submittedAt)-new Date(a.submittedAt)):[];
   return {...assessment,questions,attempts,attemptsUsed:attempts.length,bestScore:attempts.length?Math.max(...attempts.map(a=>a.score)):null,passed:attempts.some(a=>a.passed)};
@@ -1129,7 +1147,12 @@ export const handleRequest=async (req,res)=>{
         else assessmentCourseId=db.modules.find(m=>m.id===assessment.scopeId)?.courseId||null;
         if(assessmentCourseId) maybeQueueCourseCompleted(db,user,assessmentCourseId); markLocalEmailsSent(db);
         await writeDb(db);
-        return json(res,200,{attempt,passingScore:assessment.passingScore,attemptsUsed:prior.length+1,attemptsRemaining:assessment.maxAttempts>0?Math.max(0,assessment.maxAttempts-(prior.length+1)):null,lessonCompletion});
+        const attemptsUsed=prior.length+1;
+        const attemptsRemaining=assessment.maxAttempts>0?Math.max(0,assessment.maxAttempts-attemptsUsed):null;
+        const revealAnswers=passed||(attemptsRemaining===0);
+        const publicAnswers=review.map(r=>revealAnswers?r:{questionId:r.questionId,selectedOption:r.selectedOption,correct:r.correct});
+        const publicAttempt={...attempt,answers:publicAnswers};
+        return json(res,200,{attempt:publicAttempt,passingScore:assessment.passingScore,attemptsUsed,attemptsRemaining,revealAnswers,lessonCompletion});
       }
 
       if(url.pathname==='/api/certificate/status' && req.method==='GET'){
