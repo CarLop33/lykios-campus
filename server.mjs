@@ -35,6 +35,7 @@ const FILE_BACKEND = process.env.LYKIOS_FILE_BACKEND || (process.env.VERCEL ? 'b
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const MAX_JSON_BYTES = 9_000_000;
 const MAX_RESOURCE_BYTES = 6_000_000;
+const MAX_TEST_VIDEO_BYTES = 3_000_000;
 const VIDEO_TOKEN_TTL_MS = 1000 * 60 * 10;
 const VIDEO_TOKEN_SECRET = process.env.LYKIOS_VIDEO_SECRET || (IS_PROD ? '' : crypto.randomBytes(32).toString('hex'));
 
@@ -935,7 +936,14 @@ export const handleRequest=async (req,res)=>{
       const ref=String(lesson.video||'');
       if(ref.startsWith('local:')){
         const file=path.join(UPLOAD_DIR,path.basename(ref.slice(6)));
-        try{const buf=await readFile(file);res.writeHead(200,{'content-type':'video/mp4','cache-control':'private, max-age=60','accept-ranges':'bytes'});return res.end(buf)}catch{return json(res,404,{error:'Vídeo no disponible'})}
+        try{const buf=await readFile(file);res.writeHead(200,{'content-type':'video/mp4','cache-control':'private, max-age=60','accept-ranges':'bytes','content-length':buf.length});return res.end(buf)}catch{return json(res,404,{error:'Vídeo no disponible'})}
+      }
+      if(ref.startsWith('blob:')){
+        try{
+          const buf=await resourceStore.read(ref.slice(5));
+          res.writeHead(200,{'content-type':lesson.videoMime||'video/mp4','cache-control':'private, max-age=60','accept-ranges':'bytes','content-length':buf.length});
+          return res.end(buf);
+        }catch{return json(res,404,{error:'Vídeo no disponible'})}
       }
       return json(res,409,{error:'Proveedor de vídeo externo aún no conectado','reference':ref});
     }
@@ -1203,6 +1211,25 @@ export const handleRequest=async (req,res)=>{
 
         const certMatch=url.pathname.match(/^\/api\/admin\/certificate\/([^/]+)\/revoke$/);
         if(certMatch&&req.method==='POST'){const cert=db.certificates.find(c=>c.id===certMatch[1]);if(!cert)return json(res,404,{error:'Certificado no encontrado'});cert.status='revoked';cert.revokedAt=now();await writeDb(db);return json(res,200,{certificate:publicCertificate(db,cert)});}
+
+        if(url.pathname==='/api/admin/video' && req.method==='POST'){
+          const body=await readBody(req);const lesson=db.lessons.find(l=>l.id===body.lessonId);if(!lesson)return json(res,404,{error:'Clase no encontrada'});
+          const name=cleanText(body.name,220);const mime=cleanText(body.mime,120).toLowerCase();const data=String(body.dataBase64||'');
+          if(!name||!data)return json(res,400,{error:'Vídeo incompleto'});
+          if(!['video/mp4','video/webm','video/quicktime'].includes(mime))return json(res,415,{error:'Formato de vídeo no permitido'});
+          const buf=Buffer.from(data,'base64');if(!buf.length||buf.length>MAX_TEST_VIDEO_BYTES)return json(res,413,{error:'El vídeo de prueba debe pesar como máximo 3 MB'});
+          if(String(lesson.video||'').startsWith('blob:')){try{await resourceStore.remove(String(lesson.video).slice(5));}catch{}}
+          const ext=path.extname(name).slice(0,10).replace(/[^.a-zA-Z0-9]/g,'')||'.mp4';
+          const storageName=`videos/${newId()}${ext}`;const storageRef=await resourceStore.save(storageName,buf,mime);
+          lesson.video=`blob:${storageRef}`;lesson.videoMime=mime;lesson.videoName=name;lesson.updatedAt=now();
+          await writeDb(db);return json(res,201,{ok:true,video:{name,mime,size:buf.length}});
+        }
+        const videoDeleteMatch=url.pathname.match(/^\/api\/admin\/video\/([^/]+)$/);
+        if(videoDeleteMatch&&req.method==='DELETE'){
+          const lesson=db.lessons.find(l=>l.id===videoDeleteMatch[1]);if(!lesson)return json(res,404,{error:'Clase no encontrada'});
+          if(String(lesson.video||'').startsWith('blob:')){try{await resourceStore.remove(String(lesson.video).slice(5));}catch{}}
+          lesson.video=null;lesson.videoMime=null;lesson.videoName=null;lesson.updatedAt=now();await writeDb(db);return json(res,200,{ok:true});
+        }
 
         if(url.pathname==='/api/admin/resource' && req.method==='POST'){
           const body=await readBody(req);const lesson=db.lessons.find(l=>l.id===body.lessonId);if(!lesson)return json(res,404,{error:'Clase no encontrada'});
