@@ -1,0 +1,26 @@
+{
+  "name": "lykios-campus",
+  "version": "1.0.0-rc5",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs",
+    "smoke": "sh scripts/smoke-test.sh",
+    "backup": "sh scripts/backup.sh",
+    "db:import": "node scripts/migrate-json-to-postgres.mjs",
+    "db:verify": "node scripts/verify-postgres.mjs",
+    "vercel:check": "node --check api/index.mjs && node --check server.mjs && node --check resource-store.mjs",
+    "env:check:preview": "node scripts/check-env.mjs preview",
+    "env:check:production": "node scripts/check-env.mjs production",
+    "preflight:vercel": "node scripts/preflight-vercel.mjs"
+  },
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "dependencies": {
+    "pg": "8.13.1",
+    "@vercel/blob": "2.8.0",
+    "qrcode": "1.5.4"
+  }
+}
