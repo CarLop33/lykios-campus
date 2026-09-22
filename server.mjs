@@ -1258,16 +1258,11 @@ export const handleRequest=async (req,res)=>{
         if(url.pathname==='/api/admin/video/complete' && req.method==='POST'){
           const body=await readBody(req);const claims=verifyVideoUploadTicket(body.ticket);if(!claims)return json(res,400,{error:'Carga de vídeo inválida o caducada'});
           const lesson=db.lessons.find(l=>l.id===claims.lessonId);if(!lesson)return json(res,404,{error:'Clase no encontrada'});
-          const {issueSignedToken,presignUrl}=await import('@vercel/blob');
-          const headExpiry=Date.now()+60*1000;
-          const headToken=await issueSignedToken({pathname:claims.pathname,operations:['head'],validUntil:headExpiry});
-          const headSigned=await presignUrl(headToken,{pathname:claims.pathname,operation:'head',access:'private',validUntil:headExpiry});
-          const check=await fetch(headSigned.presignedUrl,{method:'HEAD'});
-          if(!check.ok)return json(res,409,{error:'El archivo todavía no está disponible en Blob'});
-          const storedSize=Number(check.headers.get('content-length')||0);
-          if(storedSize&&Number(claims.size)&&storedSize!==Number(claims.size))return json(res,409,{error:'El tamaño almacenado no coincide con el archivo seleccionado'});
+          const {head}=await import('@vercel/blob');
+          let blobMeta;
+          try{blobMeta=await head(claims.pathname);}catch{return json(res,409,{error:'El archivo todavía no está disponible en Blob'})}
           if(String(lesson.video||'').startsWith('blob:')){const oldRef=String(lesson.video).slice(5);if(oldRef!==claims.pathname){try{await resourceStore.remove(oldRef);}catch{}}}
-          lesson.video=`blob:${claims.pathname}`;lesson.videoMime=claims.mime;lesson.videoName=claims.name;lesson.videoSize=storedSize||Number(claims.size)||null;lesson.updatedAt=now();
+          lesson.video=`blob:${claims.pathname}`;lesson.videoMime=claims.mime;lesson.videoName=claims.name;lesson.videoSize=Number(blobMeta?.size)||Number(claims.size)||null;lesson.updatedAt=now();
           await writeDb(db);return json(res,201,{ok:true,video:{name:lesson.videoName,mime:lesson.videoMime,size:lesson.videoSize}});
         }
 
