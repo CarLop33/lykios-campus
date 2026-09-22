@@ -6,13 +6,41 @@
     }
   },
   "rewrites": [
-    {"source":"/verify/:path*","destination":"/api/index?lykios_verify=:path*"},
-    {"source":"/login","destination":"/index.html"},
-    {"source":"/dashboard","destination":"/index.html"},
-    {"source":"/courses","destination":"/index.html"},
-    {"source":"/course","destination":"/index.html"},
-    {"source":"/lesson","destination":"/index.html"},
-    {"source":"/profile","destination":"/index.html"},
-    {"source":"/admin","destination":"/index.html"}
+    {
+      "source": "/verify",
+      "destination": "/api/verify"
+    },
+    {
+      "source": "/verify/:path*",
+      "destination": "/api/verify/:path*"
+    },
+    {
+      "source": "/login",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/dashboard",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/courses",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/course",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/lesson",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/profile",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/admin",
+      "destination": "/index.html"
+    }
   ]
 }
