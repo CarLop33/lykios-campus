@@ -1250,8 +1250,8 @@ export const handleRequest=async (req,res)=>{
           const pathname=`videos/${lesson.id}/${newId()}${ext}`;
           const expiresAt=Date.now()+15*60*1000;
           const {issueSignedToken,presignUrl}=await import('@vercel/blob');
-          const signedToken=await issueSignedToken({pathname,operations:['put'],validUntil:expiresAt});
-          const signed=await presignUrl(signedToken,{pathname,operation:'put',access:'private',validUntil:expiresAt,allowedContentTypes:[mime],maximumSizeInBytes:MAX_VIDEO_BYTES,allowOverwrite:false});
+          const signedToken=await issueSignedToken({pathname,operations:['put'],validUntil:expiresAt,allowedContentTypes:[mime],maximumSizeInBytes:MAX_VIDEO_BYTES});
+          const signed=await presignUrl(signedToken,{pathname,operation:'put',access:'private',validUntil:expiresAt,allowedContentTypes:[mime],maximumSizeInBytes:MAX_VIDEO_BYTES,addRandomSuffix:false,allowOverwrite:false});
           const ticket=signVideoUploadTicket({lessonId:lesson.id,pathname,name,mime,size,expiresAt});
           return json(res,200,{uploadUrl:signed.presignedUrl,ticket,expiresAt});
         }
