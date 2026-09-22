@@ -1037,13 +1037,13 @@ export const handleRequest=async (req,res)=>{
       return json(res,200,{ok:true},{'set-cookie':sessionCookie('',0)});
     }
 
-    if(url.pathname==='/verify' && req.method==='GET'){
+    if((url.pathname==='/verify'||url.pathname==='/api/verify') && req.method==='GET'){
       const code=cleanText(url.searchParams.get('code')||'',80).toUpperCase();
       if(!code)return text(res,200,verificationHtml(null,''),'text/html; charset=utf-8',{'cache-control':'no-store'});
       const db=await readDb();const cert=db.certificates.find(c=>c.code===code);const payload=cert?publicCertificate(db,cert):null;
       return text(res,payload?200:404,verificationHtml(payload,code),'text/html; charset=utf-8',{'cache-control':'no-store'});
     }
-    const verifyMatch=url.pathname.match(/^\/verify\/([A-Z0-9-]+)$/i);
+    const verifyMatch=url.pathname.match(/^\/(?:api\/)?verify\/([A-Z0-9-]+)$/i);
     if(verifyMatch && req.method==='GET'){
       const code=verifyMatch[1].toUpperCase();const db=await readDb(); const cert=db.certificates.find(c=>c.code===code);
       const payload=cert?publicCertificate(db,cert):null;
