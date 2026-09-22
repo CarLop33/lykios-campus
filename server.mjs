@@ -161,7 +161,9 @@ async function readDb(){
       await writeDb(db);
     }
   }
-  Object.defineProperty(db,'__storageVersion',{value:loaded.version,writable:true,enumerable:false,configurable:true});
+  if(!Object.prototype.hasOwnProperty.call(db,'__storageVersion')){
+    Object.defineProperty(db,'__storageVersion',{value:loaded.version,writable:true,enumerable:false,configurable:true});
+  }
   let changed=false;
   if ((db.meta?.schemaVersion||1) < 2) {
     db.modules.forEach(m=>{ if(!['draft','published'].includes(m.status)){m.status='published';changed=true;} });
