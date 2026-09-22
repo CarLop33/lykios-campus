@@ -355,6 +355,55 @@ function videoProgressPayload(db,user,lessonId,videoId=null){
   const latest=rows.filter(p=>p.lastPlayedAt).sort((a,b)=>new Date(b.lastPlayedAt)-new Date(a.lastPlayedAt))[0]||rows[0];
   return {currentTime:latest.currentTime||0,duration:latest.duration||0,percent,lastPlayedAt:latest.lastPlayedAt||null,completed:rows.every(p=>p.completed)};
 }
+function lessonCompletionStatus(db,user,lesson){
+  const videos=lessonVideos(lesson);
+  const videoStates=videos.map(v=>({id:v.id,name:v.name,progress:singleVideoProgress(db,user,lesson.id,v.id)}));
+  const videosCompleted=videoStates.filter(v=>v.progress.completed).length;
+  const videoPercent=videos.length?Math.round(videoStates.reduce((n,v)=>n+(Number(v.progress.percent)||0),0)/videos.length):100;
+  const assessment=assessmentForScope(db,'lesson',lesson.id);
+  const assessmentRequired=Boolean(assessment&&assessment.status==='published');
+  const assessmentPassed=!assessmentRequired||db.attempts.some(a=>a.userId===user.id&&a.assessmentId===assessment.id&&a.passed);
+  const hasRequirements=videos.length>0||assessmentRequired;
+  const requirementsMet=(videos.length===0||videosCompleted===videos.length)&&assessmentPassed;
+  const parts=[];
+  if(videos.length)parts.push(videoPercent);
+  if(assessmentRequired)parts.push(assessmentPassed?100:0);
+  const progressPercent=hasRequirements?Math.min(100,Math.round(parts.reduce((a,b)=>a+b,0)/Math.max(1,parts.length))):0;
+  return {hasRequirements,requirementsMet,videosRequired:videos.length,videosCompleted,videoPercent,assessmentRequired,assessmentPassed,assessmentId:assessmentRequired?assessment.id:null,progressPercent};
+}
+function lessonProgressRow(db,enrollment,lessonId){
+  return db.progress.find(p=>p.enrollmentId===enrollment.id&&p.lessonId===lessonId)||null;
+}
+function lessonIsComplete(db,user,enrollment,lesson){
+  const status=lessonCompletionStatus(db,user,lesson);
+  if(status.hasRequirements)return status.requirementsMet;
+  return Boolean(lessonProgressRow(db,enrollment,lesson.id)?.completed);
+}
+function syncLessonCompletion(db,user,lesson){
+  const enrollment=db.enrollments.find(e=>e.userId===user.id&&e.courseId===lesson.courseId&&e.status==='active');
+  if(!enrollment)return {changed:false,completed:false,status:lessonCompletionStatus(db,user,lesson)};
+  const status=lessonCompletionStatus(db,user,lesson);
+  let p=lessonProgressRow(db,enrollment,lesson.id);
+  if(!p){p={id:newId(),enrollmentId:enrollment.id,lessonId:lesson.id,completed:false,progressPercent:0,updatedAt:now()};db.progress.push(p)}
+  const before=Boolean(p.completed);
+  if(status.hasRequirements){
+    p.completed=status.requirementsMet;
+    p.progressPercent=status.requirementsMet?100:Math.min(99,status.progressPercent);
+    p.updatedAt=now();
+    if(p.completed){if(!p.completedAt)p.completedAt=now();p.completionMode='requirements';}
+    else {p.completedAt=null;p.completionMode='requirements';}
+  }
+  const changed=before!==Boolean(p.completed);
+  if(changed&&p.completed)db.activity.push({id:newId(),userId:user.id,type:'lesson_completed',label:`Clase ${lesson.code} completada automáticamente`,at:now()});
+  return {changed,completed:Boolean(p.completed),progress:p,status:{...status,completed:Boolean(p.completed)}};
+}
+function reconcileLessonForStudents(db,lesson){
+  const enrollments=db.enrollments.filter(e=>e.courseId===lesson.courseId&&e.status==='active');
+  for(const enrollment of enrollments){
+    const user=db.users.find(u=>u.id===enrollment.userId);
+    if(user)syncLessonCompletion(db,user,lesson);
+  }
+}
 function canAccessLesson(db,user,lesson){
   if(user.role==='admin')return true;
   return lesson.status==='published' && db.enrollments.some(e=>e.userId===user.id&&e.courseId===lesson.courseId&&e.status==='active');
@@ -369,13 +418,14 @@ function coursePayload(db, user, slug='peeling-quimico'){
       ...l,
       videos:lessonVideos(l).map(v=>({...v,progress:videoProgressPayload(db,user,l.id,v.id)})),
       videoProgress: videoProgressPayload(db,user,l.id),
-      assessment:(()=>{const a=assessmentForScope(db,'lesson',l.id);return a&&a.status==='published'?{id:a.id,title:a.title,passingScore:a.passingScore,maxAttempts:a.maxAttempts}:null})()
+      completionStatus:(()=>{const enrollment=db.enrollments.find(e=>e.userId===user.id&&e.courseId===l.courseId&&e.status==='active');const s=lessonCompletionStatus(db,user,l);return {...s,completed:enrollment?lessonIsComplete(db,user,enrollment,l):false};})(),
+      assessment:(()=>{const a=assessmentForScope(db,'lesson',l.id);return a&&a.status==='published'?{id:a.id,title:a.title,passingScore:a.passingScore,maxAttempts:a.maxAttempts,passed:db.attempts.some(x=>x.userId===user.id&&x.assessmentId===a.id&&x.passed)}:null})()
     }))
   }));
   const enrollment=db.enrollments.find(e=>e.userId===user.id && e.courseId===course.id);
   const progress=enrollment?db.progress.filter(p=>p.enrollmentId===enrollment.id):[];
-  const completed=new Set(progress.filter(p=>p.completed).map(p=>p.lessonId));
   const visibleLessons=modules.flatMap(m=>m.lessons);
+  const completed=new Set(enrollment?visibleLessons.filter(l=>lessonIsComplete(db,user,enrollment,l)).map(l=>l.id):[]);
   const total=visibleLessons.length;
   const completedCount=visibleLessons.filter(l=>completed.has(l.id)).length;
   const assessmentStatus=courseAssessmentStatus(db,user,course.id);
@@ -497,7 +547,7 @@ function courseCompletionStatus(db,user,courseId){
   if(!enrollment) return {eligible:false,error:'Sin matrícula activa'};
   const publishedModules=db.modules.filter(m=>m.courseId===courseId&&m.status==='published').map(m=>m.id);
   const lessons=db.lessons.filter(l=>l.courseId===courseId&&l.status==='published'&&publishedModules.includes(l.moduleId));
-  const completed=new Set(db.progress.filter(p=>p.enrollmentId===enrollment.id&&p.completed).map(p=>p.lessonId));
+  const completed=new Set(lessons.filter(l=>lessonIsComplete(db,user,enrollment,l)).map(l=>l.id));
   const incompleteLessons=lessons.filter(l=>!completed.has(l.id));
   const assessmentStatus=courseAssessmentStatus(db,user,courseId);
   const eligible=course.certificateEnabled!==false && incompleteLessons.length===0 && assessmentStatus.allPassed;
@@ -1032,10 +1082,17 @@ export const handleRequest=async (req,res)=>{
       if(url.pathname==='/api/progress' && req.method==='POST'){
         const body=await readBody(req); const lesson=db.lessons.find(l=>l.id===body.lessonId); if(!lesson || lesson.status!=='published') return json(res,404,{error:'Clase no encontrada'});
         const enrollment=db.enrollments.find(e=>e.userId===user.id && e.courseId===lesson.courseId && e.status==='active'); if(!enrollment) return json(res,403,{error:'Sin matrícula activa'});
+        const requirementStatus=lessonCompletionStatus(db,user,lesson);
+        if(requirementStatus.hasRequirements){
+          const synced=syncLessonCompletion(db,user,lesson);
+          await writeDb(db);
+          return json(res,409,{error:'Esta clase se completa automáticamente al cumplir sus requisitos',completionStatus:synced.status});
+        }
         let p=db.progress.find(x=>x.enrollmentId===enrollment.id&&x.lessonId===lesson.id);
         if(!p){ p={id:newId(),enrollmentId:enrollment.id,lessonId:lesson.id,completed:false,progressPercent:0,updatedAt:now()}; db.progress.push(p); }
-        p.completed=body.completed!==false; p.progressPercent=p.completed?100:Number(body.progressPercent||0); p.updatedAt=now(); if(p.completed&&!p.completedAt)p.completedAt=now();
-        db.activity.push({id:newId(),userId:user.id,type:'lesson_completed',label:`Clase ${lesson.code} completada`,at:now()});
+        const before=Boolean(p.completed);p.completed=body.completed!==false; p.progressPercent=p.completed?100:Number(body.progressPercent||0); p.updatedAt=now(); if(p.completed&&!p.completedAt)p.completedAt=now();
+        if(!p.completed)p.completedAt=null;
+        if(p.completed&&!before)db.activity.push({id:newId(),userId:user.id,type:'lesson_completed',label:`Clase ${lesson.code} completada`,at:now()});
         maybeQueueCourseCompleted(db,user,lesson.courseId); markLocalEmailsSent(db);
         await writeDb(db); return json(res,200,{ok:true,progress:p,course:coursePayload(db,user,db.courses.find(c=>c.id===lesson.courseId).slug)});
       }
@@ -1067,10 +1124,12 @@ export const handleRequest=async (req,res)=>{
         const attempt={id:newId(),assessmentId:assessment.id,userId:user.id,score,passed,answers:review,submittedAt:now()};
         db.attempts.push(attempt);
         db.activity.push({id:newId(),userId:user.id,type:'assessment_submitted',label:`Evaluación: ${assessment.title} · ${score}%`,at:now()});
-        let assessmentCourseId=null; if(assessment.scopeType==='lesson')assessmentCourseId=db.lessons.find(l=>l.id===assessment.scopeId)?.courseId||null; else assessmentCourseId=db.modules.find(m=>m.id===assessment.scopeId)?.courseId||null;
+        let assessmentCourseId=null;let lessonCompletion=null;
+        if(assessment.scopeType==='lesson'){const lesson=db.lessons.find(l=>l.id===assessment.scopeId);assessmentCourseId=lesson?.courseId||null;if(lesson)lessonCompletion=syncLessonCompletion(db,user,lesson).status;}
+        else assessmentCourseId=db.modules.find(m=>m.id===assessment.scopeId)?.courseId||null;
         if(assessmentCourseId) maybeQueueCourseCompleted(db,user,assessmentCourseId); markLocalEmailsSent(db);
         await writeDb(db);
-        return json(res,200,{attempt,passingScore:assessment.passingScore,attemptsUsed:prior.length+1,attemptsRemaining:assessment.maxAttempts>0?Math.max(0,assessment.maxAttempts-(prior.length+1)):null});
+        return json(res,200,{attempt,passingScore:assessment.passingScore,attemptsUsed:prior.length+1,attemptsRemaining:assessment.maxAttempts>0?Math.max(0,assessment.maxAttempts-(prior.length+1)):null,lessonCompletion});
       }
 
       if(url.pathname==='/api/certificate/status' && req.method==='GET'){
@@ -1118,7 +1177,9 @@ export const handleRequest=async (req,res)=>{
         let vp=db.videoProgress.find(x=>x.userId===user.id&&x.lessonId===lesson.id&&String(x.videoId||'')===String(selected.id));
         if(!vp){vp={id:newId(),userId:user.id,lessonId:lesson.id,videoId:selected.id,currentTime:0,duration:0,percent:0,completed:false,lastPlayedAt:null};db.videoProgress.push(vp)}
         vp.currentTime=currentTime; vp.duration=duration; vp.percent=Math.max(vp.percent||0,percent); vp.completed=vp.completed||percent>=90; vp.lastPlayedAt=now();
-        await writeDb(db); return json(res,200,{progress:videoProgressPayload(db,user,lesson.id,selected.id),lessonVideoProgress:videoProgressPayload(db,user,lesson.id)});
+        const completion=syncLessonCompletion(db,user,lesson);
+        if(completion.completed)maybeQueueCourseCompleted(db,user,lesson.courseId);markLocalEmailsSent(db);
+        await writeDb(db); return json(res,200,{progress:videoProgressPayload(db,user,lesson.id,selected.id),lessonVideoProgress:videoProgressPayload(db,user,lesson.id),lessonCompletion:completion.status});
       }
       if(url.pathname==='/api/resource' && req.method==='GET'){
         const found=findResource(db,url.searchParams.get('id')); if(!found) return json(res,404,{error:'Recurso no encontrado'});
@@ -1307,6 +1368,8 @@ export const handleRequest=async (req,res)=>{
           }else lesson.videos.push(nextVideo);
           lesson.videos.sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0)).forEach((v,i)=>v.position=i+1);
           syncPrimaryVideoFields(lesson);lesson.updatedAt=now();
+          if(claims.mode==='replace')db.videoProgress=db.videoProgress.filter(v=>!(v.lessonId===lesson.id&&String(v.videoId||'')===String(nextVideo.id)));
+          reconcileLessonForStudents(db,lesson);
           await writeDb(db);
           if(oldRef&&oldRef!==nextVideo.ref&&String(oldRef).startsWith('blob:')){try{await resourceStore.remove(String(oldRef).slice(5));}catch{}}
           return json(res,201,{ok:true,video:nextVideo,videos:lesson.videos});
@@ -1330,7 +1393,7 @@ export const handleRequest=async (req,res)=>{
           lesson.videos=lessonVideos(lesson);const requested=url.searchParams.get('videoId');const target=requested?lesson.videos.find(v=>v.id===requested):lesson.videos[0];if(!target)return json(res,404,{error:'Vídeo no encontrado'});
           if(String(target.ref||'').startsWith('blob:')){try{await resourceStore.remove(String(target.ref).slice(5));}catch{}}
           lesson.videos=lesson.videos.filter(v=>v.id!==target.id).map((v,i)=>({...v,position:i+1}));db.videoProgress=db.videoProgress.filter(v=>!(v.lessonId===lesson.id&&String(v.videoId||'')===String(target.id)));
-          syncPrimaryVideoFields(lesson);lesson.updatedAt=now();await writeDb(db);return json(res,200,{ok:true,videos:lesson.videos});
+          syncPrimaryVideoFields(lesson);lesson.updatedAt=now();reconcileLessonForStudents(db,lesson);await writeDb(db);return json(res,200,{ok:true,videos:lesson.videos});
         }
 
         if(url.pathname==='/api/admin/resource' && req.method==='POST'){
