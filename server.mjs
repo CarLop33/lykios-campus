@@ -1069,7 +1069,7 @@ export const handleRequest=async (req,res)=>{
           const pathname=ref.slice(5);
           const {issueSignedToken,presignUrl}=await import('@vercel/blob');
           const signedToken=await issueSignedToken({pathname,operations:['get'],validUntil:expiresAt});
-          const signed=await presignUrl(signedToken,{pathname,operation:'get',validUntil:expiresAt});
+          const signed=await presignUrl(signedToken,{pathname,operation:'get',access:'private',validUntil:expiresAt});
           streamUrl=signed.presignedUrl;
         }
         return json(res,200,{token,expiresAt,streamUrl,progress:videoProgressPayload(db,user,lesson.id)});
@@ -1251,7 +1251,7 @@ export const handleRequest=async (req,res)=>{
           const expiresAt=Date.now()+15*60*1000;
           const {issueSignedToken,presignUrl}=await import('@vercel/blob');
           const signedToken=await issueSignedToken({pathname,operations:['put'],validUntil:expiresAt});
-          const signed=await presignUrl(signedToken,{pathname,operation:'put',validUntil:expiresAt});
+          const signed=await presignUrl(signedToken,{pathname,operation:'put',access:'private',validUntil:expiresAt,allowedContentTypes:[mime],maximumSizeInBytes:MAX_VIDEO_BYTES,allowOverwrite:false});
           const ticket=signVideoUploadTicket({lessonId:lesson.id,pathname,name,mime,size,expiresAt});
           return json(res,200,{uploadUrl:signed.presignedUrl,ticket,expiresAt});
         }
@@ -1261,7 +1261,7 @@ export const handleRequest=async (req,res)=>{
           const {issueSignedToken,presignUrl}=await import('@vercel/blob');
           const headExpiry=Date.now()+60*1000;
           const headToken=await issueSignedToken({pathname:claims.pathname,operations:['head'],validUntil:headExpiry});
-          const headSigned=await presignUrl(headToken,{pathname:claims.pathname,operation:'head',validUntil:headExpiry});
+          const headSigned=await presignUrl(headToken,{pathname:claims.pathname,operation:'head',access:'private',validUntil:headExpiry});
           const check=await fetch(headSigned.presignedUrl,{method:'HEAD'});
           if(!check.ok)return json(res,409,{error:'El archivo todavía no está disponible en Blob'});
           const storedSize=Number(check.headers.get('content-length')||0);
