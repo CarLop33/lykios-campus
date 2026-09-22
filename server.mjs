@@ -526,8 +526,9 @@ function assessmentPayload(db,assessment,{includeAnswers=false,userId=null}={}){
     id:q.id, assessmentId:q.assessmentId, prompt:q.prompt, type:q.type, options:q.options, position:q.position,
     ...(includeAnswers?{correctOption:q.correctOption,explanation:q.explanation||''}:{})
   }));
-  const attempts=userId?db.attempts.filter(a=>a.assessmentId===assessment.id&&a.userId===userId).sort((a,b)=>new Date(b.submittedAt)-new Date(a.submittedAt)):[];
-  return {...assessment,questions,attempts,attemptsUsed:attempts.length,bestScore:attempts.length?Math.max(...attempts.map(a=>a.score)):null,passed:attempts.some(a=>a.passed)};
+  const rawAttempts=userId?db.attempts.filter(a=>a.assessmentId===assessment.id&&a.userId===userId).sort((a,b)=>new Date(b.submittedAt)-new Date(a.submittedAt)):[];
+  const attempts=includeAnswers?rawAttempts:rawAttempts.map(a=>({id:a.id,assessmentId:a.assessmentId,userId:a.userId,score:a.score,passed:a.passed,submittedAt:a.submittedAt}));
+  return {...assessment,questions,attempts,attemptsUsed:rawAttempts.length,bestScore:rawAttempts.length?Math.max(...rawAttempts.map(a=>a.score)):null,passed:rawAttempts.some(a=>a.passed)};
 }
 function visibleAssessment(db,user,assessment){
   if(!assessment || assessment.status!=='published') return false;
@@ -1126,6 +1127,7 @@ export const handleRequest=async (req,res)=>{
         const assessment=db.assessments.find(a=>a.id===body.assessmentId);
         if(!assessment || !visibleAssessment(db,user,assessment)) return json(res,404,{error:'Evaluación no disponible'});
         const prior=db.attempts.filter(a=>a.assessmentId===assessment.id&&a.userId===user.id);
+        if(prior.some(a=>a.passed)) return json(res,409,{error:'Esta evaluación ya está aprobada'});
         if(assessment.maxAttempts>0 && prior.length>=assessment.maxAttempts) return json(res,409,{error:'Has alcanzado el número máximo de intentos'});
         const questions=db.questions.filter(q=>q.assessmentId===assessment.id).sort((a,b)=>a.position-b.position);
         if(!questions.length) return json(res,409,{error:'La evaluación no tiene preguntas'});
