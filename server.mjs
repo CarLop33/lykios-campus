@@ -136,6 +136,28 @@ async function readDb(){
   const loaded=await persistence.load();
   if(!loaded) throw new Error('Almacenamiento sin estado inicial');
   const db=loaded.data;
+  if(process.env.LYKIOS_ADMIN_EMAIL && process.env.LYKIOS_ADMIN_PASSWORD){
+    db.meta ||= {};
+    const email=String(process.env.LYKIOS_ADMIN_EMAIL).trim().toLowerCase();
+    const fingerprint=crypto.createHash('sha256').update(email+'\0'+String(process.env.LYKIOS_ADMIN_PASSWORD)).digest('hex');
+    if(db.meta.adminCredentialFingerprint!==fingerprint){
+      let admin=db.users.find(u=>u.role==='admin');
+      const hp=hashPassword(String(process.env.LYKIOS_ADMIN_PASSWORD));
+      if(!admin){
+        admin={id:newId(),email,firstName:'Lykios',lastName:'Admin',role:'admin',status:'active',lastLoginAt:null,passwordSalt:hp.salt,passwordHash:hp.hash,createdAt:now()};
+        db.users.push(admin);
+      }else{
+        admin.email=email;
+        admin.passwordSalt=hp.salt;
+        admin.passwordHash=hp.hash;
+        admin.status='active';
+      }
+      db.meta.adminCredentialFingerprint=fingerprint;
+      const savedVersion=Number.isFinite(loaded.version)?loaded.version:null;
+      Object.defineProperty(db,'__storageVersion',{value:savedVersion,writable:true,enumerable:false,configurable:true});
+      await writeDb(db);
+    }
+  }
   Object.defineProperty(db,'__storageVersion',{value:loaded.version,writable:true,enumerable:false,configurable:true});
   let changed=false;
   if ((db.meta?.schemaVersion||1) < 2) {
