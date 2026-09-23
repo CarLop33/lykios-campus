@@ -15,8 +15,8 @@ const ON_VERCEL = Boolean(process.env.VERCEL);
 const VERCEL_ENV = process.env.VERCEL_ENV || '';
 const IS_PROD = ON_VERCEL ? VERCEL_ENV === 'production' : NODE_ENV === 'production';
 const IS_PREVIEW = ON_VERCEL && VERCEL_ENV === 'preview';
-const ADMIN_EMAIL = IS_PREVIEW ? 'admin@lykiosacademy.com' : (process.env.LYKIOS_ADMIN_EMAIL || '');
-const ADMIN_PASSWORD = IS_PREVIEW ? 'AdminLykios2026!' : (process.env.LYKIOS_ADMIN_PASSWORD || '');
+const ADMIN_EMAIL = process.env.LYKIOS_ADMIN_EMAIL || '';
+const ADMIN_PASSWORD = process.env.LYKIOS_ADMIN_PASSWORD || '';
 const IS_SECURE = IS_PROD || ON_VERCEL;
 const APP_VERSION = process.env.LYKIOS_VERSION || '1.0.0-rc5';
 const APP_ORIGIN = (ON_VERCEL && VERCEL_ENV !== 'production' && process.env.VERCEL_URL) ? `https://${process.env.VERCEL_URL}` : (process.env.LYKIOS_APP_ORIGIN || `http://localhost:${PORT}`);
@@ -99,7 +99,7 @@ function sameOrigin(req){
 }
 function sessionCookie(token,maxAge=SESSION_TTL_MS/1000){
   const secure=IS_SECURE?'; Secure':'';
-  return `lykios_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${Math.floor(maxAge)}${secure}`;
+  return `lykios_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${Math.floor(maxAge)}; Priority=High${secure}`;
 }
 
 const json = (res, status, body, headers={}) => {
@@ -127,13 +127,36 @@ const SAFE_RESOURCE_MIME = new Set([
 function safeResourceMime(v){ const m=cleanText(v,120).toLowerCase(); return SAFE_RESOURCE_MIME.has(m)?m:null; }
 
 
+function passwordPolicy(password){
+  const value=String(password||'');
+  if(value.length<12) return 'La contraseña debe tener al menos 12 caracteres';
+  if(value.length>128) return 'La contraseña es demasiado larga';
+  return null;
+}
 function hashPassword(password, salt=crypto.randomBytes(16).toString('hex')) {
   const hash = crypto.pbkdf2Sync(password, salt, 210000, 32, 'sha256').toString('hex');
   return { salt, hash };
 }
 function verifyPassword(password, salt, expected) {
-  const actual = crypto.pbkdf2Sync(password, salt, 210000, 32, 'sha256');
-  return crypto.timingSafeEqual(actual, Buffer.from(expected, 'hex'));
+  try{
+    if(!salt||!expected||!/^[0-9a-f]{64}$/i.test(String(expected))) return false;
+    const actual = crypto.pbkdf2Sync(String(password||''), String(salt), 210000, 32, 'sha256');
+    return crypto.timingSafeEqual(actual, Buffer.from(String(expected), 'hex'));
+  }catch{return false}
+}
+function resetTokenHash(token){return crypto.createHash('sha256').update(String(token||'')).digest('hex')}
+function accountLoginBlocked(user){return Boolean(user?.loginLockedUntil&&new Date(user.loginLockedUntil)>new Date())}
+function recordFailedLogin(user){
+  if(!user)return;
+  const t=Date.now(),windowMs=15*60*1000;
+  const started=user.failedLoginWindowStartedAt?new Date(user.failedLoginWindowStartedAt).getTime():0;
+  if(!started||t-started>windowMs){user.failedLoginCount=1;user.failedLoginWindowStartedAt=new Date(t).toISOString();}
+  else user.failedLoginCount=(Number(user.failedLoginCount)||0)+1;
+  if((Number(user.failedLoginCount)||0)>=8) user.loginLockedUntil=new Date(t+15*60*1000).toISOString();
+}
+function clearFailedLogin(user){
+  if(!user)return;
+  user.failedLoginCount=0;user.failedLoginWindowStartedAt=null;user.loginLockedUntil=null;
 }
 
 async function readDb(){
@@ -213,6 +236,13 @@ async function readDb(){
     }
     db.meta.schemaVersion=15; changed=true;
   }
+  if ((db.meta?.schemaVersion||1) < 16) {
+    db.users.forEach(u=>{if(u.failedLoginCount===undefined)u.failedLoginCount=0;if(u.failedLoginWindowStartedAt===undefined)u.failedLoginWindowStartedAt=null;if(u.loginLockedUntil===undefined)u.loginLockedUntil=null;if(u.passwordResetLastSentAt===undefined)u.passwordResetLastSentAt=null;});
+    db.passwordResetTokens=(db.passwordResetTokens||[]).filter(t=>!t.usedAt&&new Date(t.expiresAt)>new Date());
+    const demoEmails=new Set(['alumno@lykiosacademy.com','profesor@lykiosacademy.com']);
+    for(const u of db.users){if((IS_PREVIEW||IS_PROD)&&demoEmails.has(String(u.email||'').toLowerCase())){u.status='blocked';db.sessions=db.sessions.filter(s=>s.userId!==u.id);}}
+    db.meta.schemaVersion=16; changed=true;
+  }
   if (db.meta?.tutorPolicy) { const days=Math.max(0,Number(db.meta.tutorPolicy.retainQueriesDays)||0); if(days>0 && Array.isArray(db.tutorQueries)){ const cutoff=Date.now()-days*86400000; const before=db.tutorQueries.length; db.tutorQueries=db.tutorQueries.filter(q=>new Date(q.createdAt).getTime()>=cutoff); if(db.tutorQueries.length!==before) changed=true; } }
   if(changed) await writeDb(db);
   return db;
@@ -228,9 +258,8 @@ async function writeDb(db){
 }
 
 async function seedDb(){
-  const studentPass = IS_PROD ? null : hashPassword('Lykios2026!');
-  const adminPass = hashPassword(IS_PREVIEW ? ADMIN_PASSWORD : (IS_PROD ? ADMIN_PASSWORD : 'AdminLykios2026!'));
-  const teacherPass = IS_PROD ? null : hashPassword('ProfesorLykios2026!');
+  if(!ADMIN_EMAIL||!ADMIN_PASSWORD) throw new Error('Se requieren LYKIOS_ADMIN_EMAIL y LYKIOS_ADMIN_PASSWORD para inicializar el Campus');
+  const adminPass = hashPassword(ADMIN_PASSWORD);
   const manifest = JSON.parse(await readFile(path.join(__dirname,'content','peeling-quimico.json'),'utf8'));
   const course = manifest.course;
   const courseId = newId();
@@ -240,28 +269,20 @@ async function seedDb(){
     const mod = modules.find(x=>x.code===m.code);
     m.lessons.forEach((l,idx)=>lessons.push({ id:newId(), moduleId:mod.id, courseId, code:l.code, title:l.title, summary:'', position:idx+1, status:l.status==='production'?'draft':'published', durationMinutes:12, video:null, videos:[], resources:[], tutorApproved:true, tutorContent:'', tutorApprovedAt:now(), createdAt:now(), updatedAt:now() }));
   }
-  const studentId = newId();
   const adminId = newId();
-  const teacherId = newId();
-  const enrollmentId = newId();
-  const completedCodes = ['1.1','1.2','1.3','1.4','2.1','2.2'];
   const db = {
     meta:{ schemaVersion:15, createdAt:now(), app:'Lykios LMS', tutorPolicy:{retainQueriesDays:30,storeQuestionText:true,feedbackEnabled:true} },
-    users: IS_PROD ? [
-      { id:adminId, email:String(ADMIN_EMAIL).toLowerCase(), firstName:'Lykios', lastName:'Admin', role:'admin', status:'active', lastLoginAt:null, passwordSalt:adminPass.salt, passwordHash:adminPass.hash, createdAt:now() }
-    ] : [
-      { id:studentId, email:'alumno@lykiosacademy.com', firstName:'Carlos', lastName:'Alumno', role:'student', status:'active', lastLoginAt:null, passwordSalt:studentPass.salt, passwordHash:studentPass.hash, createdAt:now() },
-      { id:adminId, email:'admin@lykiosacademy.com', firstName:'Lykios', lastName:'Admin', role:'admin', status:'active', lastLoginAt:null, passwordSalt:adminPass.salt, passwordHash:adminPass.hash, createdAt:now() },
-      { id:teacherId, email:'profesor@lykiosacademy.com', firstName:'Docente', lastName:'Lykios', role:'teacher', status:'active', lastLoginAt:null, passwordSalt:teacherPass.salt, passwordHash:teacherPass.hash, createdAt:now() }
+    users:[
+      { id:adminId, email:String(ADMIN_EMAIL).toLowerCase(), firstName:'Lykios', lastName:'Admin', role:'admin', status:'active', lastLoginAt:null, failedLoginCount:0, failedLoginWindowStartedAt:null, loginLockedUntil:null, passwordResetLastSentAt:null, passwordSalt:adminPass.salt, passwordHash:adminPass.hash, createdAt:now() }
     ],
     sessions:[],
     courses:[{ id:courseId, slug:'peeling-quimico', title:course.title, subtitle:course.subtitle, description:'Curso clínico avanzado, estructurado por módulos, con progreso y evaluación.', status:'published', certificateEnabled:true, priceCents:4900, currency:'EUR', saleEnabled:true, createdAt:now(), updatedAt:now() },
              { id:newId(), slug:'piel-perfecta-20', title:'Piel Perfecta 2.0', subtitle:'Dermocosmética práctica para el cuidado diario', description:'Curso práctico de cuidado de la piel.', status:'published', certificateEnabled:true, priceCents:3200, currency:'EUR', saleEnabled:true, createdAt:now(), updatedAt:now() }],
     modules,
     lessons,
-    enrollments:IS_PROD?[]:[{ id:enrollmentId, userId:studentId, courseId, status:'active', enrolledAt:now() }],
-    progress:IS_PROD?[]:lessons.filter(l=>completedCodes.includes(l.code)).map(l=>({ id:newId(), enrollmentId, lessonId:l.id, completed:true, progressPercent:100, updatedAt:now(), completedAt:now() })),
-    activity:IS_PROD?[]:completedCodes.slice(-3).map(code=>({ id:newId(), userId:studentId, type:'lesson_completed', label:`Clase ${code} completada`, at:now() })),
+    enrollments:[],
+    progress:[],
+    activity:[],
     certificates:[],
     orders:[],
     payments:[],
@@ -276,7 +297,7 @@ async function seedDb(){
     coupons:[],
     promotions:[],
     couponRedemptions:[],
-    teacherAssignments:IS_PROD?[]:[{id:newId(),teacherId,courseId,role:'author',createdAt:now()}],
+    teacherAssignments:[],
     tutorQueries:[],
     tutorFeedback:[],
     paymentEvents:[]
@@ -896,8 +917,7 @@ function checkoutMock(db,body){
   const email=cleanText(body.email,220).toLowerCase(); const firstName=cleanText(body.firstName,120); const lastName=cleanText(body.lastName,120); const password=String(body.password||'');
   if(!email||!email.includes('@')||!firstName) return {error:'Completa nombre y email',status:400};
   let user=db.users.find(u=>u.email.toLowerCase()===email);
-  if(!user){ if(password.length<8)return {error:'La contraseña debe tener al menos 8 caracteres',status:400}; const hp=hashPassword(password); user={id:newId(),email,firstName,lastName,role:'student',status:'active',lastLoginAt:null,passwordSalt:hp.salt,passwordHash:hp.hash,createdAt:now()}; db.users.push(user); }
-  if(user.role==='admin') return {error:'Usa una cuenta de alumno para comprar cursos',status:409};
+  if(!user){const policy=passwordPolicy(password);if(policy)return {error:policy,status:400};const hp=hashPassword(password);user={id:newId(),email,firstName,lastName,role:'student',status:'active',lastLoginAt:null,failedLoginCount:0,failedLoginWindowStartedAt:null,loginLockedUntil:null,passwordResetLastSentAt:null,passwordSalt:hp.salt,passwordHash:hp.hash,createdAt:now()};db.users.push(user);}else{if(user.role!=='student')return {error:'Usa una cuenta de alumno para comprar cursos',status:409};if((user.status||'active')!=='active')return {error:'Cuenta bloqueada. Contacta con Lykios Academy.',status:403};if(!verifyPassword(password,user.passwordSalt,user.passwordHash))return {error:'Ese email ya tiene una cuenta. Introduce su contraseña correcta.',status:401};}
 
   const courseIds=itemType==='bundle'?(target.courseIds||[]):[target.id];
   const validCourses=courseIds.map(id=>db.courses.find(c=>c.id===id&&c.status==='published')).filter(Boolean);
@@ -933,8 +953,7 @@ function prepareCheckout(db,body){
   const email=cleanText(body.email,220).toLowerCase(); const firstName=cleanText(body.firstName,120); const lastName=cleanText(body.lastName,120); const password=String(body.password||'');
   if(!email||!email.includes('@')||!firstName) return {error:'Completa nombre y email',status:400};
   let user=db.users.find(u=>u.email.toLowerCase()===email);
-  if(!user){ if(password.length<8)return {error:'La contraseña debe tener al menos 8 caracteres',status:400}; const hp=hashPassword(password); user={id:newId(),email,firstName,lastName,role:'student',status:'active',lastLoginAt:null,passwordSalt:hp.salt,passwordHash:hp.hash,createdAt:now()}; db.users.push(user); }
-  if(user.role!=='student') return {error:'Usa una cuenta de alumno para comprar cursos',status:409};
+  if(!user){const policy=passwordPolicy(password);if(policy)return {error:policy,status:400};const hp=hashPassword(password);user={id:newId(),email,firstName,lastName,role:'student',status:'active',lastLoginAt:null,failedLoginCount:0,failedLoginWindowStartedAt:null,loginLockedUntil:null,passwordResetLastSentAt:null,passwordSalt:hp.salt,passwordHash:hp.hash,createdAt:now()};db.users.push(user);}else{if(user.role!=='student')return {error:'Usa una cuenta de alumno para comprar cursos',status:409};if((user.status||'active')!=='active')return {error:'Cuenta bloqueada. Contacta con Lykios Academy.',status:403};if(!verifyPassword(password,user.passwordSalt,user.passwordHash))return {error:'Ese email ya tiene una cuenta. Introduce su contraseña correcta.',status:401};}
   const courseIds=itemType==='bundle'?(target.courseIds||[]):[target.id];
   const validCourses=courseIds.map(id=>db.courses.find(c=>c.id===id&&c.status==='published')).filter(Boolean);
   if(!validCourses.length)return {error:'No hay cursos disponibles en este producto',status:409};
@@ -1074,23 +1093,40 @@ export const handleRequest=async (req,res)=>{
     if(url.pathname==='/api/password/forgot' && req.method==='POST'){
       const rl=rateLimit(`forgot:${clientIp(req)}`,5,15*60*1000); if(!rl.ok)return json(res,429,{error:'Demasiados intentos. Prueba más tarde.'},{'retry-after':String(Math.ceil((rl.reset-Date.now())/1000))});
       const body=await readBody(req); const db=await readDb(); const email=cleanText(body.email,220).toLowerCase();
-      const user=db.users.find(u=>u.email.toLowerCase()===email&&u.role==='student');
-      if(user){db.passwordResetTokens=(db.passwordResetTokens||[]).filter(t=>!(t.userId===user.id&&new Date(t.expiresAt)>new Date()));const token=crypto.randomBytes(32).toString('base64url');db.passwordResetTokens.push({id:newId(),token,userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+60*60*1000).toISOString(),usedAt:null});queueEmail(db,{to:user.email,type:'password_reset',userId:user.id,meta:{resetUrl:`${APP_ORIGIN}/?reset=${encodeURIComponent(token)}`}});markLocalEmailsSent(db);await writeDb(db);}
+      const user=db.users.find(u=>u.email.toLowerCase()===email);
+      if(user&&(user.status||'active')==='active'){
+        const last=user.passwordResetLastSentAt?new Date(user.passwordResetLastSentAt).getTime():0;
+        if(!last||Date.now()-last>60*1000){
+          db.passwordResetTokens=(db.passwordResetTokens||[]).filter(t=>t.userId!==user.id&&new Date(t.expiresAt)>new Date()&&!t.usedAt);
+          const token=crypto.randomBytes(32).toString('base64url');
+          db.passwordResetTokens.push({id:newId(),tokenHash:resetTokenHash(token),userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+60*60*1000).toISOString(),usedAt:null});
+          user.passwordResetLastSentAt=now();
+          queueEmail(db,{to:user.email,type:'password_reset',userId:user.id,meta:{resetUrl:`${APP_ORIGIN}/?reset=${encodeURIComponent(token)}`}});
+          markLocalEmailsSent(db); await writeDb(db);
+        }
+      }
       return json(res,200,{ok:true,message:'Si existe una cuenta con ese email, recibirás instrucciones.'});
     }
     if(url.pathname==='/api/password/reset' && req.method==='POST'){
+      const rl=rateLimit(`reset:${clientIp(req)}`,8,15*60*1000);if(!rl.ok)return json(res,429,{error:'Demasiados intentos. Prueba más tarde.'});
       const body=await readBody(req); const db=await readDb(); const token=cleanText(body.token,200); const password=String(body.password||'');
-      if(password.length<8)return json(res,400,{error:'La contraseña debe tener al menos 8 caracteres'});
-      const item=(db.passwordResetTokens||[]).find(t=>t.token===token&&!t.usedAt&&new Date(t.expiresAt)>new Date()); if(!item)return json(res,400,{error:'El enlace no es válido o ha caducado'});
-      const user=db.users.find(u=>u.id===item.userId); if(!user)return json(res,404,{error:'Cuenta no encontrada'}); const hp=hashPassword(password); user.passwordSalt=hp.salt;user.passwordHash=hp.hash;item.usedAt=now();db.sessions=db.sessions.filter(s=>s.userId!==user.id);await writeDb(db);return json(res,200,{ok:true});
+      const policy=passwordPolicy(password);if(policy)return json(res,400,{error:policy});
+      const tokenHash=resetTokenHash(token);
+      const item=(db.passwordResetTokens||[]).find(t=>(t.tokenHash===tokenHash||t.token===token)&&!t.usedAt&&new Date(t.expiresAt)>new Date()); if(!item)return json(res,400,{error:'El enlace no es válido o ha caducado'});
+      const user=db.users.find(u=>u.id===item.userId); if(!user)return json(res,404,{error:'Cuenta no encontrada'});
+      const hp=hashPassword(password); user.passwordSalt=hp.salt;user.passwordHash=hp.hash;user.passwordResetLastSentAt=null;clearFailedLogin(user);item.usedAt=now();delete item.token;db.sessions=db.sessions.filter(s=>s.userId!==user.id);await writeDb(db);return json(res,200,{ok:true});
     }
     if(url.pathname==='/api/login' && req.method==='POST'){
       const rl=rateLimit(`login:${clientIp(req)}`,10,15*60*1000); if(!rl.ok)return json(res,429,{error:'Demasiados intentos. Prueba más tarde.'},{'retry-after':String(Math.ceil((rl.reset-Date.now())/1000))});
-      const body=await readBody(req); const db=await readDb();
-      const user=db.users.find(u=>u.email.toLowerCase()===String(body.email||'').toLowerCase());
-      if(!user || !verifyPassword(String(body.password||''),user.passwordSalt,user.passwordHash)) return json(res,401,{error:'Credenciales incorrectas'});
+      const body=await readBody(req); const db=await readDb(); const email=cleanText(body.email,220).toLowerCase();
+      const user=db.users.find(u=>u.email.toLowerCase()===email);
+      if(user&&accountLoginBlocked(user))return json(res,429,{error:'Demasiados intentos. Espera unos minutos antes de volver a intentarlo.'});
+      if(!user || !verifyPassword(String(body.password||''),user.passwordSalt,user.passwordHash)){
+        if(user){recordFailedLogin(user);await writeDb(db);}
+        return json(res,401,{error:'Credenciales incorrectas'});
+      }
       if((user.status||'active')!=='active' && user.role!=='admin') return json(res,403,{error:'Cuenta bloqueada. Contacta con Lykios Academy.'});
-      db.sessions=db.sessions.filter(s=>new Date(s.expiresAt)>new Date());
+      clearFailedLogin(user);db.sessions=db.sessions.filter(s=>new Date(s.expiresAt)>new Date());
       const token=crypto.randomBytes(32).toString('base64url');
       user.lastLoginAt=now();
       db.sessions.push({id:newId(),token,userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+SESSION_TTL_MS).toISOString()});
@@ -1147,6 +1183,18 @@ export const handleRequest=async (req,res)=>{
       const db=await readDb(); const user=await auth(req,db);
       if(!user) return json(res,401,{error:'No autenticado'});
       if(url.pathname==='/api/me') return json(res,200,{id:user.id,email:user.email,firstName:user.firstName,lastName:user.lastName,role:user.role,status:user.status||'active'});
+      if(url.pathname==='/api/password/change' && req.method==='POST'){
+        const rl=rateLimit(`change-password:${user.id}`,6,15*60*1000);if(!rl.ok)return json(res,429,{error:'Demasiados intentos. Prueba más tarde.'});
+        const body=await readBody(req);const currentPassword=String(body.currentPassword||''),newPassword=String(body.newPassword||'');
+        if(!verifyPassword(currentPassword,user.passwordSalt,user.passwordHash))return json(res,401,{error:'La contraseña actual no es correcta'});
+        const policy=passwordPolicy(newPassword);if(policy)return json(res,400,{error:policy});
+        if(verifyPassword(newPassword,user.passwordSalt,user.passwordHash))return json(res,400,{error:'La nueva contraseña debe ser diferente de la actual'});
+        const hp=hashPassword(newPassword);user.passwordSalt=hp.salt;user.passwordHash=hp.hash;clearFailedLogin(user);
+        db.sessions=db.sessions.filter(s=>s.userId!==user.id);
+        const token=crypto.randomBytes(32).toString('base64url');db.sessions.push({id:newId(),token,userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+SESSION_TTL_MS).toISOString()});
+        db.activity.push({id:newId(),userId:user.id,type:'password_changed',label:'Contraseña actualizada',at:now()});
+        await writeDb(db);return json(res,200,{ok:true},{'set-cookie':sessionCookie(token)});
+      }
       if(url.pathname==='/api/dashboard'){
         const enrollments=db.enrollments.filter(e=>e.userId===user.id&&e.status==='active');
         const courses=enrollments.map(e=>coursePayload(db,user,db.courses.find(c=>c.id===e.courseId)?.slug)).filter(Boolean);
