@@ -243,6 +243,10 @@ async function readDb(){
     for(const u of db.users){if((IS_PREVIEW||IS_PROD)&&demoEmails.has(String(u.email||'').toLowerCase())){u.status='blocked';db.sessions=db.sessions.filter(s=>s.userId!==u.id);}}
     db.meta.schemaVersion=16; changed=true;
   }
+  if ((db.meta?.schemaVersion||1) < 17) {
+    db.courses.forEach(c=>{if(c.sequentialAccess===undefined)c.sequentialAccess=c.slug==='peeling-quimico';});
+    db.meta.schemaVersion=17; changed=true;
+  }
   if (db.meta?.tutorPolicy) { const days=Math.max(0,Number(db.meta.tutorPolicy.retainQueriesDays)||0); if(days>0 && Array.isArray(db.tutorQueries)){ const cutoff=Date.now()-days*86400000; const before=db.tutorQueries.length; db.tutorQueries=db.tutorQueries.filter(q=>new Date(q.createdAt).getTime()>=cutoff); if(db.tutorQueries.length!==before) changed=true; } }
   if(changed) await writeDb(db);
   return db;
@@ -271,13 +275,13 @@ async function seedDb(){
   }
   const adminId = newId();
   const db = {
-    meta:{ schemaVersion:15, createdAt:now(), app:'Lykios LMS', tutorPolicy:{retainQueriesDays:30,storeQuestionText:true,feedbackEnabled:true} },
+    meta:{ schemaVersion:17, createdAt:now(), app:'Lykios LMS', tutorPolicy:{retainQueriesDays:30,storeQuestionText:true,feedbackEnabled:true} },
     users:[
       { id:adminId, email:String(ADMIN_EMAIL).toLowerCase(), firstName:'Lykios', lastName:'Admin', role:'admin', status:'active', lastLoginAt:null, failedLoginCount:0, failedLoginWindowStartedAt:null, loginLockedUntil:null, passwordResetLastSentAt:null, passwordSalt:adminPass.salt, passwordHash:adminPass.hash, createdAt:now() }
     ],
     sessions:[],
-    courses:[{ id:courseId, slug:'peeling-quimico', title:course.title, subtitle:course.subtitle, description:'Curso clínico avanzado, estructurado por módulos, con progreso y evaluación.', status:'published', certificateEnabled:true, priceCents:4900, currency:'EUR', saleEnabled:true, createdAt:now(), updatedAt:now() },
-             { id:newId(), slug:'piel-perfecta-20', title:'Piel Perfecta 2.0', subtitle:'Dermocosmética práctica para el cuidado diario', description:'Curso práctico de cuidado de la piel.', status:'published', certificateEnabled:true, priceCents:3200, currency:'EUR', saleEnabled:true, createdAt:now(), updatedAt:now() }],
+    courses:[{ id:courseId, slug:'peeling-quimico', title:course.title, subtitle:course.subtitle, description:'Curso clínico avanzado, estructurado por módulos, con progreso y evaluación.', status:'published', certificateEnabled:true, sequentialAccess:true, priceCents:4900, currency:'EUR', saleEnabled:true, createdAt:now(), updatedAt:now() },
+             { id:newId(), slug:'piel-perfecta-20', title:'Piel Perfecta 2.0', subtitle:'Dermocosmética práctica para el cuidado diario', description:'Curso práctico de cuidado de la piel.', status:'published', certificateEnabled:true, sequentialAccess:false, priceCents:3200, currency:'EUR', saleEnabled:true, createdAt:now(), updatedAt:now() }],
     modules,
     lessons,
     enrollments:[],
@@ -443,32 +447,93 @@ function reconcileLessonForStudents(db,lesson){
     if(user)syncLessonCompletion(db,user,lesson);
   }
 }
+function orderedPublishedLessons(db,courseId){
+  const modules=db.modules.filter(m=>m.courseId===courseId&&m.status==='published').sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0));
+  return modules.flatMap(m=>db.lessons.filter(l=>l.moduleId===m.id&&l.status==='published').sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0)));
+}
+function sequenceState(db,user,lesson){
+  if(!lesson)return {locked:true,lockReason:'Clase no disponible'};
+  if(user.role==='admin'||user.role==='teacher')return {locked:false,lockReason:null,blockingLesson:null};
+  const course=db.courses.find(c=>c.id===lesson.courseId);
+  if(!course||course.sequentialAccess!==true)return {locked:false,lockReason:null,blockingLesson:null};
+  const enrollment=db.enrollments.find(e=>e.userId===user.id&&e.courseId===lesson.courseId&&e.status==='active');
+  if(!enrollment)return {locked:true,lockReason:'Sin matrícula activa',blockingLesson:null};
+  const ordered=orderedPublishedLessons(db,lesson.courseId);
+  const index=ordered.findIndex(l=>l.id===lesson.id);
+  if(index<=0)return {locked:false,lockReason:null,blockingLesson:null};
+  const blocking=ordered.slice(0,index).find(prev=>!lessonIsComplete(db,user,enrollment,prev));
+  return blocking
+    ?{locked:true,lockReason:`Completa primero la clase ${blocking.code}`,blockingLesson:{id:blocking.id,code:blocking.code,title:blocking.title}}
+    :{locked:false,lockReason:null,blockingLesson:null};
+}
 function canAccessLesson(db,user,lesson){
+  if(!lesson)return false;
   if(user.role==='admin')return true;
-  return lesson.status==='published' && db.enrollments.some(e=>e.userId===user.id&&e.courseId===lesson.courseId&&e.status==='active');
+  if(user.role==='teacher')return canTeachCourse(db,user,lesson.courseId);
+  if(lesson.status!=='published')return false;
+  const enrolled=db.enrollments.some(e=>e.userId===user.id&&e.courseId===lesson.courseId&&e.status==='active');
+  if(!enrolled)return false;
+  return !sequenceState(db,user,lesson).locked;
+}
+function lessonLastActivityAt(db,user,enrollment,lesson){
+  const times=[];
+  const row=enrollment?lessonProgressRow(db,enrollment,lesson.id):null;if(row?.updatedAt)times.push(row.updatedAt);
+  for(const v of lessonVideos(lesson)){const p=singleVideoProgress(db,user,lesson.id,v.id);if(p.lastPlayedAt)times.push(p.lastPlayedAt);}
+  const assessment=assessmentForScope(db,'lesson',lesson.id);
+  if(assessment){for(const a of db.attempts.filter(x=>x.userId===user.id&&x.assessmentId===assessment.id))if(a.submittedAt)times.push(a.submittedAt);}
+  return times.sort((a,b)=>new Date(b)-new Date(a))[0]||null;
+}
+function compactLessonRef(lesson,module=null){
+  if(!lesson)return null;
+  return {id:lesson.id,code:lesson.code,title:lesson.title,moduleCode:module?.code||'',moduleTitle:module?.title||'',durationMinutes:lesson.durationMinutes||0,progressPercent:lesson.completionStatus?.progressPercent||0,lastActivityAt:lesson.lastActivityAt||null};
 }
 function coursePayload(db, user, slug='peeling-quimico'){
   const course=db.courses.find(c=>c.slug===slug);
   if(!course || (user.role!=='admin' && course.status!=='published')) return null;
-  const modules=db.modules.filter(m=>m.courseId===course.id && (user.role==='admin'||m.status==='published')).sort((a,b)=>a.position-b.position).map(m=>({
+  const enrollment=db.enrollments.find(e=>e.userId===user.id && e.courseId===course.id && e.status==='active');
+  const modules=db.modules.filter(m=>m.courseId===course.id && (user.role==='admin'||m.status==='published')).sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0)).map(m=>({
     ...m,
     assessment:(()=>{const a=assessmentForScope(db,'module',m.id);return a&&a.status==='published'?{id:a.id,title:a.title,passingScore:a.passingScore,maxAttempts:a.maxAttempts}:null})(),
-    lessons:db.lessons.filter(l=>l.moduleId===m.id && (user.role==='admin'||l.status==='published')).sort((a,b)=>a.position-b.position).map(l=>({
-      ...l,
-      videos:lessonVideos(l).map(v=>({...v,progress:videoProgressPayload(db,user,l.id,v.id)})),
-      videoProgress: videoProgressPayload(db,user,l.id),
-      completionStatus:(()=>{const enrollment=db.enrollments.find(e=>e.userId===user.id&&e.courseId===l.courseId&&e.status==='active');const s=lessonCompletionStatus(db,user,l);return {...s,completed:enrollment?lessonIsComplete(db,user,enrollment,l):false};})(),
-      assessment:(()=>{const a=assessmentForScope(db,'lesson',l.id);return a&&a.status==='published'?{id:a.id,title:a.title,passingScore:a.passingScore,maxAttempts:a.maxAttempts,passed:db.attempts.some(x=>x.userId===user.id&&x.assessmentId===a.id&&x.passed)}:null})()
-    }))
+    lessons:db.lessons.filter(l=>l.moduleId===m.id && (user.role==='admin'||l.status==='published')).sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0)).map(l=>{
+      const completion=(()=>{const st=lessonCompletionStatus(db,user,l);return {...st,completed:enrollment?lessonIsComplete(db,user,enrollment,l):false};})();
+      const seq=sequenceState(db,user,l);
+      return {
+        ...l,
+        videos:lessonVideos(l).map(v=>({...v,progress:videoProgressPayload(db,user,l.id,v.id)})),
+        videoProgress:videoProgressPayload(db,user,l.id),
+        completionStatus:completion,
+        assessment:(()=>{const a=assessmentForScope(db,'lesson',l.id);return a&&a.status==='published'?{id:a.id,title:a.title,passingScore:a.passingScore,maxAttempts:a.maxAttempts,passed:db.attempts.some(x=>x.userId===user.id&&x.assessmentId===a.id&&x.passed)}:null})(),
+        locked:seq.locked,
+        lockReason:seq.lockReason,
+        blockingLesson:seq.blockingLesson,
+        lastActivityAt:lessonLastActivityAt(db,user,enrollment,l)
+      };
+    })
   }));
-  const enrollment=db.enrollments.find(e=>e.userId===user.id && e.courseId===course.id);
   const progress=enrollment?db.progress.filter(p=>p.enrollmentId===enrollment.id):[];
   const visibleLessons=modules.flatMap(m=>m.lessons);
   const completed=new Set(enrollment?visibleLessons.filter(l=>lessonIsComplete(db,user,enrollment,l)).map(l=>l.id):[]);
   const total=visibleLessons.length;
   const completedCount=visibleLessons.filter(l=>completed.has(l.id)).length;
   const assessmentStatus=courseAssessmentStatus(db,user,course.id);
-  return { ...course, modules, enrollment, progressPercent: total?Math.round(completedCount/total*100):0, completedLessonIds:[...completed], assessmentStatus };
+  const incompleteUnlocked=visibleLessons.filter(l=>!completed.has(l.id)&&!l.locked);
+  const touched=incompleteUnlocked.filter(l=>l.lastActivityAt).sort((a,b)=>new Date(b.lastActivityAt)-new Date(a.lastActivityAt));
+  const resume=touched[0]||incompleteUnlocked[0]||null;
+  const next=incompleteUnlocked[0]||null;
+  const moduleFor=id=>modules.find(m=>m.lessons.some(l=>l.id===id))||null;
+  return {
+    ...course,
+    sequentialAccess:course.sequentialAccess===true,
+    modules,
+    enrollment,
+    progressPercent:total?Math.round(completedCount/total*100):0,
+    completedCount,
+    totalLessons:total,
+    completedLessonIds:[...completed],
+    assessmentStatus,
+    resumeLesson:resume?compactLessonRef(resume,moduleFor(resume.id)):null,
+    nextLesson:next?compactLessonRef(next,moduleFor(next.id)):null
+  };
 }
 
 
@@ -482,16 +547,16 @@ function tutorCourseAccess(db,user,course){
   if(user.role==='teacher') return canTeachCourse(db,user,course.id);
   return db.enrollments.some(e=>e.userId===user.id&&e.courseId===course.id&&e.status==='active');
 }
-function tutorSourcesForCourse(db,course){
+function tutorSourcesForCourse(db,course,user=null){
   const moduleIds=new Set(db.modules.filter(m=>m.courseId===course.id&&m.status==='published').map(m=>m.id));
-  return db.lessons.filter(l=>l.courseId===course.id&&moduleIds.has(l.moduleId)&&l.status==='published'&&l.tutorApproved===true).sort((a,b)=>a.position-b.position).map(l=>{
+  return db.lessons.filter(l=>l.courseId===course.id&&moduleIds.has(l.moduleId)&&l.status==='published'&&l.tutorApproved===true&&(!user||user.role!=='student'||canAccessLesson(db,user,l))).sort((a,b)=>a.position-b.position).map(l=>{
     const mod=db.modules.find(m=>m.id===l.moduleId);
     const body=[l.title,l.summary||'',l.tutorContent||''].filter(Boolean).join('\n').trim();
     return {lesson:l,module:mod,text:body,href:`/lesson?course=${encodeURIComponent(course.slug)}&lessonId=${encodeURIComponent(l.id)}`};
   });
 }
 function tutorAsk(db,user,course,question){
-  const q=cleanText(question,1200); const qTokens=tutorTokens(q); const sources=tutorSourcesForCourse(db,course);
+  const q=cleanText(question,1200); const qTokens=tutorTokens(q); const sources=tutorSourcesForCourse(db,course,user);
   if(!q||qTokens.length===0) return {grounded:false,confidence:'low',answer:'Escribe una pregunta concreta sobre el contenido del curso.',sources:[]};
   const ranked=sources.map(src=>{
     const titleTokens=tutorTokens(`${src.lesson.code} ${src.lesson.title} ${src.module?.title||''}`);
@@ -568,6 +633,10 @@ function visibleAssessment(db,user,assessment){
     const c=db.courses.find(x=>x.id===m.courseId);
     if(!c||c.status!=='published') return false;
     courseId=m.courseId;
+  }
+  if(assessment.scopeType==='lesson'){
+    const lesson=db.lessons.find(x=>x.id===assessment.scopeId);
+    return Boolean(lesson&&canAccessLesson(db,user,lesson));
   }
   return db.enrollments.some(e=>e.userId===user.id&&e.courseId===courseId&&e.status==='active');
 }
@@ -1198,8 +1267,13 @@ export const handleRequest=async (req,res)=>{
       if(url.pathname==='/api/dashboard'){
         const enrollments=db.enrollments.filter(e=>e.userId===user.id&&e.status==='active');
         const courses=enrollments.map(e=>coursePayload(db,user,db.courses.find(c=>c.id===e.courseId)?.slug)).filter(Boolean);
-        const completed=db.progress.filter(p=>enrollments.some(e=>e.id===p.enrollmentId)&&p.completed).length;
-        return json(res,200,{stats:{activeCourses:enrollments.filter(e=>e.status==='active').length,completedLessons:completed,certificates:db.certificates.filter(c=>c.userId===user.id).length,streakDays:6},courses,activity:db.activity.filter(a=>a.userId===user.id).slice(-8).reverse()});
+        const completedLessons=courses.reduce((n,c)=>n+(Number(c.completedCount)||0),0);
+        const totalLessons=courses.reduce((n,c)=>n+(Number(c.totalLessons)||0),0);
+        const overallProgressPercent=totalLessons?Math.round(completedLessons/totalLessons*100):0;
+        const resumable=courses.filter(c=>c.resumeLesson).sort((a,b)=>new Date(b.resumeLesson?.lastActivityAt||b.enrollment?.enrolledAt||0)-new Date(a.resumeLesson?.lastActivityAt||a.enrollment?.enrolledAt||0));
+        const continueCourse=resumable[0]||courses.find(c=>(Number(c.progressPercent)||0)<100)||courses[0]||null;
+        const certificates=db.certificates.filter(c=>c.userId===user.id&&(c.status||'valid')!=='revoked').map(c=>publicCertificate(db,c)).filter(Boolean).sort((a,b)=>new Date(b.issuedAt)-new Date(a.issuedAt));
+        return json(res,200,{stats:{activeCourses:courses.length,completedLessons,totalLessons,overallProgressPercent,certificates:certificates.length},continueCourse:continueCourse?{slug:continueCourse.slug,title:continueCourse.title,subtitle:continueCourse.subtitle,progressPercent:continueCourse.progressPercent,resumeLesson:continueCourse.resumeLesson,nextLesson:continueCourse.nextLesson}:null,courses,certificates,activity:db.activity.filter(a=>a.userId===user.id).slice(-8).reverse()});
       }
       if(url.pathname==='/api/course' && req.method==='GET'){
         const course=coursePayload(db,user,url.searchParams.get('slug')||'peeling-quimico'); if(!course) return json(res,404,{error:'Curso no encontrado'}); return json(res,200,course);
@@ -1222,7 +1296,7 @@ export const handleRequest=async (req,res)=>{
       }
       if(url.pathname==='/api/progress' && req.method==='POST'){
         const body=await readBody(req); const lesson=db.lessons.find(l=>l.id===body.lessonId); if(!lesson || lesson.status!=='published') return json(res,404,{error:'Clase no encontrada'});
-        const enrollment=db.enrollments.find(e=>e.userId===user.id && e.courseId===lesson.courseId && e.status==='active'); if(!enrollment) return json(res,403,{error:'Sin matrícula activa'});
+        const enrollment=db.enrollments.find(e=>e.userId===user.id && e.courseId===lesson.courseId && e.status==='active'); if(!enrollment) return json(res,403,{error:'Sin matrícula activa'}); if(!canAccessLesson(db,user,lesson))return json(res,403,{error:sequenceState(db,user,lesson).lockReason||'Clase bloqueada'});
         const requirementStatus=lessonCompletionStatus(db,user,lesson);
         if(requirementStatus.hasRequirements){
           const synced=syncLessonCompletion(db,user,lesson);
@@ -1336,7 +1410,7 @@ export const handleRequest=async (req,res)=>{
       if(url.pathname==='/api/resource' && req.method==='GET'){
         const found=findResource(db,url.searchParams.get('id')); if(!found) return json(res,404,{error:'Recurso no encontrado'});
         const {lesson,resource}=found;
-        const allowed=user.role==='admin'||canTeachCourse(db,user,lesson.courseId)||db.enrollments.some(e=>e.userId===user.id&&e.courseId===lesson.courseId&&e.status==='active');
+        const allowed=user.role==='admin'||canTeachCourse(db,user,lesson.courseId)||canAccessLesson(db,user,lesson);
         if(!allowed) return json(res,403,{error:'Sin acceso al recurso'});
         const file=path.join(UPLOAD_DIR,path.basename(resource.storageName||''));
         try{const buf=await resourceStore.read(resource.storageName);return text(res,200,buf,resource.mime||'application/octet-stream',{'content-disposition':`attachment; filename*=UTF-8''${encodeURIComponent(resource.name)}`,'x-content-type-options':'nosniff'});}catch{return json(res,404,{error:'Archivo no disponible'});}
@@ -1426,13 +1500,13 @@ export const handleRequest=async (req,res)=>{
 
         if(url.pathname==='/api/admin/course' && req.method==='POST'){
           const body=await readBody(req); if(!cleanText(body.title,160)) return json(res,400,{error:'El título es obligatorio'});
-          const id=newId(); const course={id,slug:uniqueSlug(db,body.slug||body.title),title:cleanText(body.title,160),subtitle:cleanText(body.subtitle,220),description:cleanText(body.description,5000),status:safeStatus(body.status),certificateEnabled:body.certificateEnabled!==false,priceCents:Math.max(0,Number(body.priceCents)||0),currency:cleanText(body.currency,3)||'EUR',saleEnabled:body.saleEnabled!==false,createdAt:now(),updatedAt:now()};
+          const id=newId(); const course={id,slug:uniqueSlug(db,body.slug||body.title),title:cleanText(body.title,160),subtitle:cleanText(body.subtitle,220),description:cleanText(body.description,5000),status:safeStatus(body.status),certificateEnabled:body.certificateEnabled!==false,sequentialAccess:body.sequentialAccess===true,priceCents:Math.max(0,Number(body.priceCents)||0),currency:cleanText(body.currency,3)||'EUR',saleEnabled:body.saleEnabled!==false,createdAt:now(),updatedAt:now()};
           db.courses.push(course); await writeDb(db); return json(res,201,{course});
         }
         const courseMatch=url.pathname.match(/^\/api\/admin\/course\/([^/]+)$/);
         if(courseMatch){
           const course=db.courses.find(c=>c.id===courseMatch[1]); if(!course)return json(res,404,{error:'Curso no encontrado'});
-          if(req.method==='PUT'){const body=await readBody(req);course.title=cleanText(body.title||course.title,160);course.subtitle=cleanText(body.subtitle??course.subtitle,220);course.description=cleanText(body.description??course.description,5000);course.slug=uniqueSlug(db,body.slug||course.slug,course.id);course.status=safeStatus(body.status??course.status);course.certificateEnabled=body.certificateEnabled!==false;course.updatedAt=now();await writeDb(db);return json(res,200,{course});}
+          if(req.method==='PUT'){const body=await readBody(req);course.title=cleanText(body.title||course.title,160);course.subtitle=cleanText(body.subtitle??course.subtitle,220);course.description=cleanText(body.description??course.description,5000);course.slug=uniqueSlug(db,body.slug||course.slug,course.id);course.status=safeStatus(body.status??course.status);course.certificateEnabled=body.certificateEnabled!==false;course.sequentialAccess=body.sequentialAccess===true;course.updatedAt=now();await writeDb(db);return json(res,200,{course});}
           if(req.method==='DELETE'){
             if(db.enrollments.some(e=>e.courseId===course.id)) return json(res,409,{error:'No se puede eliminar un curso con matrículas. Puedes despublicarlo.'});
             const lessonIds=db.lessons.filter(l=>l.courseId===course.id).map(l=>l.id);for(const l of db.lessons.filter(l=>lessonIds.includes(l.id))){for(const r of l.resources||[])await deleteResourceFile(r);for(const v of lessonVideos(l)){if(String(v.ref||'').startsWith('blob:')){try{await resourceStore.remove(String(v.ref).slice(5));}catch{}}}}
