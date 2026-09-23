@@ -579,7 +579,7 @@ function certificateCode(){
 function publicCertificate(db,cert){
   const user=db.users.find(u=>u.id===cert.userId); const course=db.courses.find(c=>c.id===cert.courseId);
   if(!user||!course) return null;
-  return {code:cert.code,status:cert.status||'valid',studentName:`${user.firstName} ${user.lastName}`.trim(),courseTitle:course.title,courseSubtitle:course.subtitle||'',issuedAt:cert.issuedAt,revokedAt:cert.revokedAt||null,issuer:'Lykios Academy',verificationPath:`/verify/${cert.code}`};
+  return {code:cert.code,status:cert.status||'valid',studentName:`${user.firstName} ${user.lastName}`.trim(),courseTitle:course.title,courseSubtitle:course.subtitle||'',courseDescription:cleanText(course.description||'',260),issuedAt:cert.issuedAt,revokedAt:cert.revokedAt||null,issuer:'Lykios Academy',verificationPath:`/verify/${cert.code}`};
 }
 const CERT_SIGNATURE_PNG=Buffer.from('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','base64');
 async function certificatePdf(cert){
@@ -636,9 +636,10 @@ async function certificatePdf(cert){
   centered('HA COMPLETADO SATISFACTORIAMENTE EL CURSO',helv,8.8,331,ink,470);
   centered(cert.courseTitle,timesBold,25,294,teal,700);
   if(cert.courseSubtitle)centered(cert.courseSubtitle,helv,11,273,teal,620);
-  centered('Tras completar el programa formativo y superar los requisitos académicos correspondientes,',helv,9.2,238,muted,650);
-  centered('se expide el presente certificado.',helv,9.2,223,muted,650);
-  centered(new Date(cert.issuedAt).toLocaleDateString('es-ES',{day:'2-digit',month:'long',year:'numeric'}),helv,10.3,195,ink,260);
+  const shortDescription=cleanText(cert.courseDescription||'',180);
+  if(shortDescription)centered(shortDescription,helv,9.2,239,muted,650);
+  else centered('Programa formativo completado satisfactoriamente.',helv,9.2,239,muted,650);
+  centered(new Date(cert.issuedAt).toLocaleDateString('es-ES',{day:'2-digit',month:'long',year:'numeric'}),helv,10.3,205,ink,260);
 
   try{
     const sig=await pdf.embedPng(CERT_SIGNATURE_PNG);
@@ -1232,8 +1233,13 @@ export const handleRequest=async (req,res)=>{
 
       if(url.pathname==='/api/certificate/status' && req.method==='GET'){
         const course=db.courses.find(c=>c.slug===(url.searchParams.get('slug')||'peeling-quimico')); if(!course)return json(res,404,{error:'Curso no encontrado'});
-        const existing=db.certificates.find(c=>c.userId===user.id&&c.courseId===course.id&&c.status!=='revoked');
-        return json(res,200,{completion:courseCompletionStatus(db,user,course.id),certificate:existing?publicCertificate(db,existing):null});
+        const completion=courseCompletionStatus(db,user,course.id);
+        let existing=db.certificates.find(c=>c.userId===user.id&&c.courseId===course.id&&c.status!=='revoked');
+        if(!existing&&completion.eligible&&course.certificateEnabled!==false){
+          maybeQueueCourseCompleted(db,user,course.id);markLocalEmailsSent(db);await writeDb(db);
+          existing=db.certificates.find(c=>c.userId===user.id&&c.courseId===course.id&&c.status!=='revoked');
+        }
+        return json(res,200,{completion,certificate:existing?publicCertificate(db,existing):null});
       }
       if(url.pathname==='/api/certificate/issue' && req.method==='POST'){
         const body=await readBody(req); const course=db.courses.find(c=>c.id===body.courseId||c.slug===body.slug); if(!course)return json(res,404,{error:'Curso no encontrado'});
