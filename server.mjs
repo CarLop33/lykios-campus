@@ -29,6 +29,11 @@ const PAYMENT_PROVIDER = process.env.LYKIOS_PAYMENT_PROVIDER || (IS_PROD ? 'stri
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || '';
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
 const STRIPE_API_BASE = 'https://api.stripe.com/v1';
+const MAIL_FROM = process.env.LYKIOS_MAIL_FROM || 'campus@lykiosacademy.com';
+const MAIL_FROM_NAME = process.env.LYKIOS_MAIL_FROM_NAME || 'Lykios Academy Campus';
+const MAIL_REPLY_TO = process.env.LYKIOS_MAIL_REPLY_TO || MAIL_FROM;
+const ZOHO_CPAAS_SEND_TOKEN = process.env.ZOHO_CPAAS_SEND_TOKEN || '';
+const ZOHO_CPAAS_API_BASE = (process.env.ZOHO_CPAAS_API_BASE || 'https://cpaas.zoho.com/v1.1').replace(/\/$/,'');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const UPLOAD_DIR = process.env.LYKIOS_UPLOAD_DIR || (process.env.VERCEL ? '/tmp/lykios-uploads' : path.join(__dirname, 'uploads'));
 const FILE_BACKEND = process.env.LYKIOS_FILE_BACKEND || (process.env.VERCEL ? 'blob' : 'fs');
@@ -255,6 +260,7 @@ let dbWriteChain = Promise.resolve();
 async function writeDb(db){
   const expected=Number.isFinite(db.__storageVersion)?db.__storageVersion:null;
   dbWriteChain=dbWriteChain.then(async()=>{
+    await flushEmailOutbox(db);
     const next=await persistence.save(db,expected);
     Object.defineProperty(db,'__storageVersion',{value:next,writable:true,enumerable:false,configurable:true});
   });
@@ -911,11 +917,87 @@ function queueEmail(db,{to,type,userId=null,courseId=null,meta={}}){
   const user=userId?db.users.find(u=>u.id===userId):null;
   const course=courseId?db.courses.find(c=>c.id===courseId):null;
   const tpl=mailTemplate(type,{firstName:user?.firstName||meta.firstName,courseTitle:course?.title||meta.courseTitle,orderNumber:meta.orderNumber,certificateCode:meta.certificateCode,resetUrl:meta.resetUrl});
-  const item={id:newId(),to:cleanText(to,220).toLowerCase(),type,subject:tpl.subject,html:tpl.html,status:'queued',provider:'local',userId,courseId,meta,createdAt:now(),sentAt:null};
+  const item={id:newId(),to:cleanText(to,220).toLowerCase(),type,subject:tpl.subject,html:tpl.html,status:'queued',provider:'zoho_cpaas',userId,courseId,meta,createdAt:now(),sentAt:null,attempts:0,lastError:null,providerRequestId:null};
   db.emailOutbox ||= []; db.emailOutbox.push(item); return item;
 }
+// Compatibilidad con llamadas existentes: ya no finge que el correo se envió.
+// La entrega real se realiza desde writeDb() mediante flushEmailOutbox().
 function markLocalEmailsSent(db){
-  for(const e of (db.emailOutbox||[])) if(e.status==='queued'){e.status='sent';e.sentAt=now();}
+  for(const e of (db.emailOutbox||[])) if(e.status==='queued') e.provider='zoho_cpaas';
+}
+function emailTextFallback(html=''){
+  return String(html)
+    .replace(/<br\s*\/?>/gi,'\n')
+    .replace(/<\/p>/gi,'\n\n')
+    .replace(/<[^>]+>/g,' ')
+    .replace(/&nbsp;/gi,' ')
+    .replace(/&amp;/gi,'&')
+    .replace(/&lt;/gi,'<')
+    .replace(/&gt;/gi,'>')
+    .replace(/\s+\n/g,'\n')
+    .replace(/\n\s+/g,'\n')
+    .replace(/[ \t]{2,}/g,' ')
+    .trim();
+}
+async function sendEmailViaZohoCpaas(item){
+  if(!ZOHO_CPAAS_SEND_TOKEN) return {sent:false,configured:false};
+  const body={
+    from:{address:MAIL_FROM,name:MAIL_FROM_NAME},
+    to:[{email_address:{address:item.to}}],
+    reply_to:[{address:MAIL_REPLY_TO,name:MAIL_FROM_NAME}],
+    subject:item.subject,
+    htmlbody:item.html,
+    textbody:emailTextFallback(item.html),
+    client_reference:`lykios-${item.id}`,
+    track_opens:false,
+    track_clicks:false
+  };
+  const response=await fetch(`${ZOHO_CPAAS_API_BASE}/email`,{
+    method:'POST',
+    headers:{
+      'content-type':'application/json',
+      'accept':'application/json',
+      'authorization':`Zoho-enczapikey ${ZOHO_CPAAS_SEND_TOKEN}`
+    },
+    body:JSON.stringify(body),
+    signal:AbortSignal.timeout(12000)
+  });
+  const raw=await response.text();
+  let payload=null;try{payload=raw?JSON.parse(raw):null}catch{}
+  if(!response.ok){
+    const message=cleanText(payload?.data?.message||payload?.message||raw||`HTTP ${response.status}`,500);
+    throw new Error(`Zoho CPaaS: ${message}`);
+  }
+  return {sent:true,configured:true,requestId:cleanText(payload?.request_id||'',180)};
+}
+async function flushEmailOutbox(db,{limit=12}={}){
+  const queued=(db.emailOutbox||[]).filter(e=>e.status==='queued').slice(0,limit);
+  if(!queued.length) return {configured:Boolean(ZOHO_CPAAS_SEND_TOKEN),sent:0,failed:0};
+  if(!ZOHO_CPAAS_SEND_TOKEN) return {configured:false,sent:0,failed:0,queued:queued.length};
+  let sent=0,failed=0;
+  for(const item of queued){
+    item.attempts=(Number(item.attempts)||0)+1;
+    item.lastAttemptAt=now();
+    try{
+      const result=await sendEmailViaZohoCpaas(item);
+      if(result.sent){
+        item.status='sent';
+        item.sentAt=now();
+        item.lastError=null;
+        item.provider='zoho_cpaas';
+        item.providerRequestId=result.requestId||null;
+        sent++;
+      }
+    }catch(error){
+      item.status='failed';
+      item.lastError=cleanText(error?.message||String(error),500);
+      item.failedAt=now();
+      item.provider='zoho_cpaas';
+      failed++;
+      logEvent('error','transactional_email_failed',{emailId:item.id,type:item.type,error:item.lastError});
+    }
+  }
+  return {configured:true,sent,failed};
 }
 function emailAdminPayload(db){return (db.emailOutbox||[]).slice().sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).map(e=>{const u=db.users.find(x=>x.id===e.userId),c=db.courses.find(x=>x.id===e.courseId);return {...e,studentName:u?`${u.firstName} ${u.lastName}`.trim():'',courseTitle:c?.title||''};});}
 function maybeQueueCourseCompleted(db,user,courseId){
