@@ -174,7 +174,85 @@ async function uploadResource(lessonId,input){const file=input.files?.[0];if(!fi
 function fileToBase64(file){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result).split(',')[1]||'');r.onerror=reject;r.readAsDataURL(file)})}
 async function deleteResource(id){if(!confirm('¿Eliminar este recurso?'))return;try{await api(`/api/admin/resource/${id}`,{method:'DELETE'});toast('Recurso eliminado');await renderAdmin()}catch(e){toast(e.message,'error')}}
 
+
+// Puente de eventos compatible con CSP estricta.
+// La UI histórica genera atributos onclick, pero script-src 'self' bloquea
+// su ejecución inline. Este listener interpreta únicamente llamadas a una
+// lista cerrada de acciones propias del Campus, sin eval ni unsafe-inline.
+const SAFE_CLICK_ACTIONS=new Set([
+  'setRoute','logout','openForgotPassword','openStore','render','openCheckout','validateCoupon',
+  'openCourse','issueCertificate','openLesson','completeLesson','openAssessment','renderAssessment',
+  'openTutorSource','sendTutorFeedback','openBundleForm','openCouponForm','openPromotionForm',
+  'deleteMonetization','closeDrawer','openTeacherModuleForm','openTeacherLessonForm','openCourseForm',
+  'openTeacherAdminForm','unassignTeacher','assignTeacher','openStudent','toggleStudentStatus',
+  'manualEnroll','removeEnrollment','sendStudentReminder','resetStudentProgress','revokeCertificate',
+  'toggleCourseStatus','deleteCourse','openModuleForm','openAssessmentForm','toggleModuleStatus',
+  'deleteModule','openLessonForm','deleteResource','deleteTestVideo','toggleLessonStatus','deleteLesson',
+  'openQuestionForm','deleteQuestion','deleteAssessment','reopenAssessment','renderCourse'
+]);
+function parseSafeActionArgs(raw=''){
+  const out=[];let token='',quote='',escape=false;
+  const push=()=>{
+    const v=token.trim();token='';
+    if(!v){return}
+    if((v.startsWith("'")&&v.endsWith("'"))||(v.startsWith('"')&&v.endsWith('"'))){
+      const q=v[0];let s=v.slice(1,-1);
+      s=s.replace(/\\\\/g,'\\').replace(q==="'"?/\\'/g:/\\"/g,q);
+      out.push(s);return;
+    }
+    if(v==='true'){out.push(true);return}
+    if(v==='false'){out.push(false);return}
+    if(v==='null'){out.push(null);return}
+    if(/^-?\d+(?:\.\d+)?$/.test(v)){out.push(Number(v));return}
+    throw new Error('Argumento de acción no permitido');
+  };
+  for(let i=0;i<raw.length;i++){
+    const ch=raw[i];
+    if(escape){token+=ch;escape=false;continue}
+    if(ch==='\\'){token+=ch;escape=true;continue}
+    if(quote){token+=ch;if(ch===quote)quote='';continue}
+    if(ch==="'"||ch==='"'){quote=ch;token+=ch;continue}
+    if(ch===','){push();continue}
+    token+=ch;
+  }
+  if(token.trim())push();
+  return out;
+}
+function runSafeInlineActions(code,event,el){
+  if(!code)return false;
+  if(code.includes('if(event.target===this)')&&event.target!==el)return true;
+  if(code.includes("$('#checkoutRoot').innerHTML=''")){
+    const root=$('#checkoutRoot');if(root)root.innerHTML='';return true;
+  }
+  if(code.includes('state.assessmentResult=null')) state.assessmentResult=null;
+  const calls=[...code.matchAll(/\b([A-Za-z_$][\w$]*)\s*\(([^()]*)\)/g)];
+  let handled=false;
+  for(const [,name,argsRaw] of calls){
+    if(name==='preventDefault'){event.preventDefault();handled=true;continue}
+    if(!SAFE_CLICK_ACTIONS.has(name))continue;
+    const fn=window[name];
+    if(typeof fn!=='function')continue;
+    const args=parseSafeActionArgs(argsRaw);
+    fn(...args);handled=true;
+  }
+  return handled;
+}
+document.addEventListener('click',event=>{
+  const el=event.target?.closest?.('[onclick]');
+  if(!el||el.disabled)return;
+  const code=el.getAttribute('onclick')||'';
+  try{
+    if(runSafeInlineActions(code,event,el)){
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }catch(error){
+    console.error('safe_click_bridge_failed',error);
+    toast('No se pudo ejecutar esta acción','error');
+  }
+});
+
 window.addEventListener('beforeunload',()=>{const a=activeLessonVideo;if(!a?.element?.duration)return;try{navigator.sendBeacon?.('/api/video/progress',new Blob([JSON.stringify({lessonId:a.lessonId,videoId:a.videoId,currentTime:a.element.currentTime,duration:a.element.duration})],{type:'application/json'}))}catch{}})
 function render(route){if(route==='store')return openStore();if(route==='login'||!state.me)return renderLogin();({dashboard:renderDashboard,courses:renderCourses,course:renderCourse,lesson:renderLesson,assessment:renderAssessment,profile:renderProfile,teacher:renderTeacher,admin:renderAdmin}[route]||renderDashboard)()}
-Object.assign(window,{setRoute,openCourse,logout,openStore,openForgotPassword,forgotPassword,renderResetPassword,resetPassword,openCheckout,validateCoupon,checkoutMock,checkoutReal,confirmPaymentReturn,openStudent,saveStudentProfile,toggleStudentStatus,manualEnroll,removeEnrollment,resetStudentProgress,addStudentNote,sendStudentReminder,openLesson,initLessonVideo,completeLesson,openAssessment,renderAssessment,openCourseForm,openModuleForm,openLessonForm,openAssessmentForm,openQuestionForm,reopenAssessment,deleteQuestion,deleteAssessment,closeDrawer,toggleCourseStatus,toggleModuleStatus,toggleLessonStatus,deleteCourse,deleteModule,deleteLesson,uploadResource,deleteResource,uploadTestVideo,deleteTestVideo,openBundleForm,saveBundle,openCouponForm,saveCoupon,openPromotionForm,savePromotion,deleteMonetization,renderTeacher,openTeacherModuleForm,openTeacherLessonForm,teacherUploadResource,openTeacherAdminForm,assignTeacher,unassignTeacher,askTutor,sendTutorFeedback,saveTutorPolicy,openTutorSource,state});
+Object.assign(window,{render,issueCertificate,revokeCertificate,setRoute,openCourse,logout,openStore,openForgotPassword,forgotPassword,renderResetPassword,resetPassword,openCheckout,validateCoupon,checkoutMock,checkoutReal,confirmPaymentReturn,openStudent,saveStudentProfile,toggleStudentStatus,manualEnroll,removeEnrollment,resetStudentProgress,addStudentNote,sendStudentReminder,openLesson,initLessonVideo,completeLesson,openAssessment,renderAssessment,openCourseForm,openModuleForm,openLessonForm,openAssessmentForm,openQuestionForm,reopenAssessment,deleteQuestion,deleteAssessment,closeDrawer,toggleCourseStatus,toggleModuleStatus,toggleLessonStatus,deleteCourse,deleteModule,deleteLesson,uploadResource,deleteResource,uploadTestVideo,deleteTestVideo,openBundleForm,saveBundle,openCouponForm,saveCoupon,openPromotionForm,savePromotion,deleteMonetization,renderTeacher,openTeacherModuleForm,openTeacherLessonForm,teacherUploadResource,openTeacherAdminForm,assignTeacher,unassignTeacher,askTutor,sendTutorFeedback,saveTutorPolicy,openTutorSource,state});
 setTimeout(()=>bootstrap(),0);
