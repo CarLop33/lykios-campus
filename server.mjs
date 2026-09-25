@@ -671,91 +671,87 @@ function publicCertificate(db,cert){
   if(!user||!course) return null;
   return {code:cert.code,status:cert.status||'valid',studentName:`${user.firstName} ${user.lastName}`.trim(),courseTitle:course.title,courseSubtitle:course.subtitle||'',courseDescription:cleanText(course.description||'',260),issuedAt:cert.issuedAt,revokedAt:cert.revokedAt||null,issuer:'Lykios Academy',verificationPath:`/verify/${cert.code}`};
 }
-const CERT_SIGNATURE_PNG=Buffer.from('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','base64');
+let certificateTemplateBytesPromise;
+function certificateTemplateBytes(){
+  certificateTemplateBytesPromise ||= readFile(new URL('./content/certificate-template-final.jpg', import.meta.url));
+  return certificateTemplateBytesPromise;
+}
 async function certificatePdf(cert){
   const {PDFDocument,StandardFonts,rgb}=await import('pdf-lib');
   const pdf=await PDFDocument.create();
-  const page=pdf.addPage([842,595]);
-  const W=842,H=595;
-  const cream=rgb(0.992,0.988,0.972),teal=rgb(0.02,0.24,0.28),teal2=rgb(0.02,0.55,0.58),gold=rgb(0.76,0.58,0.24),ink=rgb(0.035,0.12,0.15),muted=rgb(0.29,0.37,0.39),pale=rgb(0.80,0.94,0.93);
-  page.drawRectangle({x:0,y:0,width:W,height:H,color:cream});
-  page.drawRectangle({x:11,y:11,width:820,height:573,borderColor:gold,borderWidth:1.8});
-  page.drawRectangle({x:19,y:19,width:804,height:557,borderColor:teal,borderWidth:.7});
-  page.drawRectangle({x:27,y:27,width:788,height:541,borderColor:gold,borderWidth:.55,opacity:.65});
-  page.drawSvgPath('M 842 595 L 690 595 C 752 573 796 548 842 505 Z',{color:teal,opacity:.98});
-  page.drawSvgPath('M 842 595 L 745 595 C 790 579 814 558 842 532 Z',{color:gold,opacity:.95});
-  page.drawSvgPath('M 0 0 L 178 0 C 104 28 49 69 0 136 Z',{color:teal,opacity:.98});
-  page.drawSvgPath('M 0 0 L 115 0 C 68 20 30 48 0 90 Z',{color:gold,opacity:.95});
-  page.drawSvgPath('M 75 365 L 75 200 C 75 174 93 157 118 157 L 205 157 L 176 185 L 121 185 C 110 185 102 193 102 204 L 102 365 Z',{color:pale,opacity:.48});
+  const template=await pdf.embedJpg(await certificateTemplateBytes());
+
+  // La plantilla oficial tiene proporción 3:2. Mantenerla intacta evita
+  // deformar logo, marcos, ondas, firma y demás elementos corporativos.
+  const W=900,H=600;
+  const page=pdf.addPage([W,H]);
+  page.drawImage(template,{x:0,y:0,width:W,height:H});
 
   const helv=await pdf.embedFont(StandardFonts.Helvetica);
   const helvBold=await pdf.embedFont(StandardFonts.HelveticaBold);
-  const times=await pdf.embedFont(StandardFonts.TimesRoman);
   const timesBold=await pdf.embedFont(StandardFonts.TimesRomanBold);
-  const centered=(text,font,size,y,color=ink,maxWidth=740)=>{
-    let s=size; while(s>8&&font.widthOfTextAtSize(String(text),s)>maxWidth)s-=.5;
-    const w=font.widthOfTextAtSize(String(text),s); page.drawText(String(text),{x:(W-w)/2,y,size:s,font,color}); return s;
+  const ink=rgb(0.025,0.09,0.13);
+  const teal=rgb(0.015,0.30,0.36);
+  const muted=rgb(0.26,0.33,0.38);
+
+  const centered=(text,font,size,y,color=ink,maxWidth=760,minSize=8)=>{
+    text=cleanText(String(text||''),350);
+    let s=size;
+    while(s>minSize && font.widthOfTextAtSize(text,s)>maxWidth)s-=0.5;
+    const w=font.widthOfTextAtSize(text,s);
+    page.drawText(text,{x:(W-w)/2,y,size:s,font,color});
+    return s;
   };
-  const leftFit=(text,font,size,x,y,maxWidth,color=ink)=>{
-    let s=size; while(s>7&&font.widthOfTextAtSize(String(text),s)>maxWidth)s-=.5;
-    page.drawText(String(text),{x,y,size:s,font,color}); return s;
+  const leftFit=(text,font,size,x,y,maxWidth,color=ink,minSize=6.5)=>{
+    text=cleanText(String(text||''),420);
+    let s=size;
+    while(s>minSize && font.widthOfTextAtSize(text,s)>maxWidth)s-=0.5;
+    page.drawText(text,{x,y,size:s,font,color});
+    return s;
   };
-  const spaced=(text,font,size,x,y,spacing,color=ink)=>{
-    let cx=x; for(const ch of String(text)){page.drawText(ch,{x:cx,y,size,font,color});cx+=font.widthOfTextAtSize(ch,size)+spacing;}
+  const centeredWrap=(text,font,size,y,maxWidth,lineGap,color=muted,maxLines=2)=>{
+    const words=cleanText(String(text||''),420).split(/\s+/).filter(Boolean);
+    if(!words.length)return;
+    const lines=[]; let line='';
+    for(const word of words){
+      const trial=line?line+' '+word:word;
+      if(font.widthOfTextAtSize(trial,size)<=maxWidth || !line) line=trial;
+      else { lines.push(line); line=word; if(lines.length===maxLines-1) break; }
+    }
+    if(line && lines.length<maxLines) lines.push(line);
+    lines.slice(0,maxLines).forEach((ln,i)=>{
+      let out=ln;
+      if(i===maxLines-1 && words.join(' ').length>lines.join(' ').length) out=out.replace(/[.,;:]?$/,'')+'…';
+      const w=font.widthOfTextAtSize(out,size);
+      page.drawText(out,{x:(W-w)/2,y:y-i*lineGap,size,font,color});
+    });
   };
 
-  page.drawSvgPath('M 0 52 L 0 0 C 0 -12 10 -22 22 -22 L 66 -22 L 45 0 L 23 0 L 23 52 Z',{x:409,y:532,scale:.65,color:teal2});
-  page.drawSvgPath('M 0 18 L 30 -12 L 67 -12 L 48 7 L 22 7 Z',{x:414,y:525,scale:.62,color:teal,opacity:.96});
-  centered('LYKIOS',helvBold,20,514,ink,250);
-  spaced('ACADEMY',helv,9,380,498,4.1,teal2);
+  // Campos dinámicos sobre los espacios reservados de la plantilla oficial.
+  centered(cert.studentName,timesBold,34,337,ink,620,18);
+  centered(cert.courseTitle,timesBold,25,260,teal,700,15);
+  if(cert.courseSubtitle) centered(cert.courseSubtitle,helv,12.5,235,teal,650,8.5);
 
-  spaced('FORMACIÓN MÉDICA',helv,6.6,61,520,1.8,teal);
-  spaced('PARA UN FUTURO',helv,6.6,61,508,1.8,teal);
-  spaced('MÁS HUMANO',helv,6.6,61,496,1.8,teal);
-  page.drawLine({start:{x:61,y:482},end:{x:108,y:482},thickness:1,color:gold});
-  spaced('CIENCIA',helv,6.6,708,520,1.8,teal);
-  spaced('PRÁCTICA',helv,6.6,708,508,1.8,teal);
-  spaced('EXPERIENCIA',helv,6.6,708,496,1.8,teal);
-  spaced('RESULTADOS',helv,6.6,708,484,1.8,teal);
-  page.drawLine({start:{x:708,y:470},end:{x:748,y:470},thickness:1,color:gold});
+  const description=cleanText(cert.courseDescription||'',220);
+  if(description) centeredWrap(description,helv,10.5,204,650,13,muted,2);
 
-  centered('CERTIFICADO DE FINALIZACIÓN',timesBold,29,447,ink,650);
-  centered('LYKIOS ACADEMY CERTIFICA QUE',helv,9.5,420,teal,420);
-  centered(cert.studentName,timesBold,34,370,ink,620);
-  page.drawLine({start:{x:270,y:356},end:{x:572,y:356},thickness:1,color:gold});
-  centered('HA COMPLETADO SATISFACTORIAMENTE EL CURSO',helv,8.8,331,ink,470);
-  centered(cert.courseTitle,timesBold,25,294,teal,700);
-  if(cert.courseSubtitle)centered(cert.courseSubtitle,helv,11,273,teal,620);
-  const shortDescription=cleanText(cert.courseDescription||'',180);
-  if(shortDescription)centered(shortDescription,helv,9.2,239,muted,650);
-  else centered('Programa formativo completado satisfactoriamente.',helv,9.2,239,muted,650);
-  centered(new Date(cert.issuedAt).toLocaleDateString('es-ES',{day:'2-digit',month:'long',year:'numeric'}),helv,10.3,205,ink,260);
-
-  try{
-    const sig=await pdf.embedPng(CERT_SIGNATURE_PNG);
-    page.drawImage(sig,{x:105,y:67,width:245,height:89});
-  }catch{}
-  page.drawLine({start:{x:105,y:67},end:{x:350,y:67},thickness:.8,color:gold});
-  leftFit('Dr. Carlos López Scovino',timesBold,10.5,122,51,220,ink);
-  leftFit('Director Académico · Lykios Academy',helv,8.6,122,37,230,muted);
+  const issueDate=new Date(cert.issuedAt).toLocaleDateString('es-ES',{
+    day:'2-digit',month:'long',year:'numeric'
+  });
+  centered(issueDate,helv,11,166,ink,260,8);
 
   const verifyOrigin=(process.env.LYKIOS_PUBLIC_ORIGIN||process.env.LYKIOS_APP_ORIGIN||APP_ORIGIN).replace(/\/$/,'');
   const verifyUrl=`${verifyOrigin}/verify/${cert.code}`;
-  page.drawLine({start:{x:515,y:63},end:{x:515,y:151},thickness:1,color:gold});
-  leftFit('CÓDIGO DE VERIFICACIÓN',helvBold,7.5,531,139,165,ink);
-  leftFit(cert.code,helvBold,10.5,531,122,165,ink);
-  page.drawText('Verifica la autenticidad en',{x:531,y:99,size:7.5,font:helv,color:muted});
-  leftFit(verifyUrl.replace(/^https?:\/\//,''),helv,7.2,531,85,185,teal,);
+
+  leftFit(cert.code,helvBold,10.5,577,126,160,ink,7);
+  leftFit(verifyUrl.replace(/^https?:\/\//,''),helv,7.5,577,91,168,teal,5.8);
+
   try{
     const qr=await pdf.embedPng(await qrPng(verifyUrl));
-    page.drawRectangle({x:718,y:66,width:82,height:82,color:rgb(1,1,1),borderColor:gold,borderWidth:.8});
-    page.drawImage(qr,{x:724,y:72,width:70,height:70});
-    leftFit('ESCANEA PARA VERIFICAR',helv,5.8,716,55,90,muted);
-  }catch{}
-
-  spaced('CONOCIMIENTO QUE TRANSFORMA VIDAS',helv,6.5,292,18,2.25,gold);
-  page.drawLine({start:{x:250,y:21},end:{x:280,y:21},thickness:.8,color:gold});
-  page.drawLine({start:{x:561,y:21},end:{x:591,y:21},thickness:.8,color:gold});
+    page.drawImage(qr,{x:756,y:80,width:81,height:81});
+  }catch(error){
+    console.error(JSON.stringify({event:'certificate_qr_failed',error:error?.message||String(error)}));
+  }
 
   const bytes=await pdf.save({useObjectStreams:false});
   return Buffer.from(bytes);
