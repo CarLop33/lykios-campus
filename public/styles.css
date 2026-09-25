@@ -108,3 +108,102 @@
 @media(max-width:1050px){.student-course-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.course-hero{grid-template-columns:1fr}.course-next-card{max-width:520px}}
 @media(max-width:900px){.mobile-nav{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;position:fixed;left:12px;right:12px;bottom:10px;z-index:40;background:rgba(253,254,254,.96);border:1px solid rgba(5,61,71,.10);box-shadow:0 16px 45px rgba(5,61,71,.22);border-radius:18px;padding:6px;backdrop-filter:blur(14px)}.mobile-nav button{border:0;background:transparent;color:#687c7f;min-height:48px;border-radius:13px;font-size:9px;font-weight:700;display:grid;place-items:center;align-content:center;gap:2px;cursor:pointer}.mobile-nav button span{font-size:17px}.mobile-nav button.active{background:rgba(49,158,165,.10);color:var(--mid)}.content{padding-bottom:94px}.student-hero{align-items:flex-start}.resume-card{grid-template-columns:1fr}.resume-art{min-height:190px}.lesson-nav{display:none}.mobile-lesson-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;padding:0 2px}.mobile-lesson-head span{font-size:10px;color:var(--muted)}.lesson-view{display:block}.lesson-content{width:100%}}
 @media(max-width:640px){body{background:linear-gradient(180deg,#f7fbfb,#eef5f5)}.topbar{height:62px;padding:0 14px}.topbar .brand{font-size:13px}.topbar .brand small{display:none}.topbar .nav{display:flex}.topbar .nav button:first-child{display:none}.topbar .nav button{padding:8px 10px;font-size:11px}.content{padding:15px 13px 96px}.hero{padding:22px 19px;border-radius:20px}.hero h1{font-size:25px;line-height:1.15}.student-hero{gap:15px}.student-hero p{font-size:12px;margin-bottom:0}.global-progress{width:82px;height:82px}.global-progress b{font-size:20px}.global-progress span{font-size:7px}.grid.student-stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.student-stats .card{padding:15px;min-height:88px}.stat .value{font-size:24px}.stat .label{font-size:10px}.section-title{font-size:17px;margin:24px 0 11px}.resume-art{min-height:165px;padding:21px}.resume-art h2{font-size:20px}.resume-copy{padding:20px}.resume-lesson{grid-template-columns:38px 1fr;margin:17px 0;padding:12px}.resume-icon{width:38px;height:38px}.student-course-grid{grid-template-columns:1fr}.student-course-card{min-height:0}.section-heading-row{align-items:center}.mini-certificate{grid-template-columns:44px 1fr;padding:15px}.certificate-seal{width:42px;height:42px}.mini-cert-actions{grid-column:2;justify-content:flex-start}.student-page-head{align-items:flex-start}.overall-chip{width:62px;height:62px}.overall-chip b{font-size:17px}.library-course{padding:17px}.library-course-top{grid-template-columns:1fr auto;gap:10px}.library-course h2{font-size:18px}.course-percent{font-size:22px}.library-meta{display:grid;gap:5px}.library-actions{display:grid;grid-template-columns:1fr 1fr}.library-actions button{width:100%}.course-hero{gap:19px}.course-next-card{padding:15px}.sequence-note{max-width:190px;text-align:right}.student-module .module-head{padding:15px}.module-lessons{padding:5px 8px 10px}.student-lesson{grid-template-columns:32px minmax(0,1fr);gap:9px;padding:12px 7px}.lesson-state-icon{width:29px;height:29px}.lesson-copy>b{font-size:11px;white-space:normal}.lesson-open{grid-column:2;width:100%;min-height:42px}.lesson-main{padding:18px}.lesson-main h1{font-size:23px;line-height:1.22}.video-shell{border-radius:15px}.video-overlay span:first-child{max-width:68%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.video-metric{grid-template-columns:1fr auto}.video-metric .progress-track{grid-column:1/-1;grid-row:2}.resource-bar{display:grid;grid-template-columns:1fr}.resource-bar>*{width:100%;text-align:center}.assessment-card{display:grid!important;grid-template-columns:1fr!important;gap:12px}.assessment-card .btn{width:100%}.lesson-step-nav{grid-template-columns:1fr}.lesson-step-nav>span:empty{display:none}.lesson-step-nav button{min-height:64px}.certificate-panel{grid-template-columns:1fr!important}.certificate-actions{display:grid!important;grid-template-columns:1fr}.certificate-actions a{text-align:center}.toast{left:14px;right:14px;bottom:82px;text-align:center}.mobile-lesson-head{position:sticky;top:66px;z-index:4;background:rgba(247,251,251,.95);padding:8px 2px;backdrop-filter:blur(8px)}}
+
+
+/* Lykios Academy · verificación pública de certificados */
+.verify-page{
+  min-height:100vh;
+  padding:46px 20px;
+  background:
+    radial-gradient(circle at 8% 8%,rgba(49,158,165,.16),transparent 28%),
+    radial-gradient(circle at 92% 10%,rgba(194,151,58,.12),transparent 24%),
+    linear-gradient(145deg,#f8fbfb 0%,#eef5f4 48%,#fdfaf4 100%);
+  display:flex;align-items:flex-start;justify-content:center;color:#0b2c32
+}
+.verify-shell{width:min(760px,100%)}
+.verify-brandbar{
+  position:relative;overflow:hidden;
+  display:flex;align-items:center;justify-content:space-between;gap:24px;
+  padding:20px 26px;margin-bottom:18px;border-radius:22px;
+  background:linear-gradient(120deg,#043b45 0%,#075f66 70%,#0a7b7d 100%);
+  box-shadow:0 18px 50px rgba(5,61,71,.16)
+}
+.verify-brandbar:after{
+  content:"";position:absolute;right:-70px;top:-110px;width:240px;height:240px;border-radius:50%;
+  border:1px solid rgba(222,185,101,.5);box-shadow:0 0 0 16px rgba(222,185,101,.08),0 0 0 34px rgba(255,255,255,.04)
+}
+.verify-wordmark{display:flex;align-items:center;gap:14px;position:relative;z-index:1}
+.verify-mark{
+  width:50px;height:50px;border-radius:15px 15px 15px 4px;display:grid;place-items:center;
+  font-size:29px;font-weight:900;line-height:1;color:#fff;
+  background:linear-gradient(145deg,#5fd7d1,#11a8ad 58%,#05707b);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.2),0 8px 20px rgba(0,0,0,.12);
+  transform:skewY(-5deg)
+}
+.verify-wordmark-text{display:flex;flex-direction:column;line-height:1}
+.verify-wordmark-text strong{font-size:24px;letter-spacing:.18em;color:#fff}
+.verify-wordmark-text small{margin-top:7px;font-size:10px;letter-spacing:.42em;color:#6be1dc}
+.verify-brand-copy{position:relative;z-index:1;text-align:right;color:#fff;display:flex;flex-direction:column;gap:5px}
+.verify-brand-copy strong{font-size:11px;letter-spacing:.18em}
+.verify-brand-copy span{font-size:12px;color:#e8d2a0;letter-spacing:.035em}
+.verify-card{
+  position:relative;overflow:hidden;width:100%;box-sizing:border-box;
+  background:rgba(255,255,255,.97);border-radius:28px;padding:38px 42px 34px;
+  box-shadow:0 28px 80px rgba(5,61,71,.14);border:1px solid rgba(5,61,71,.08);text-align:center
+}
+.verify-card-accent{height:4px;position:absolute;top:0;left:0;right:0;background:linear-gradient(90deg,#c5983b,#e3c77f 38%,#20aaa7 72%,#053d47)}
+.verify-topline{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:10px}
+.verify-card .page-kicker{margin:0;color:#0a7277;font-size:11px;font-weight:800;letter-spacing:.15em;text-align:left}
+.verify-status-chip{
+  flex:0 0 auto;padding:7px 11px;border-radius:999px;background:#e9f6f4;color:#08756f;
+  font-size:10px;font-weight:900;letter-spacing:.12em;border:1px solid #cde9e4
+}
+.verify-card.invalid .verify-status-chip{background:#f8eceb;color:#8c4b47;border-color:#edd3d0}
+.verify-icon{
+  width:82px;height:82px;margin:14px auto 18px;border-radius:50%;display:grid;place-items:center;
+  font-size:36px;font-weight:800;background:linear-gradient(135deg,#053d47,#08787a);color:#72ddd4;
+  box-shadow:0 12px 26px rgba(5,61,71,.15),inset 0 0 0 1px rgba(255,255,255,.16)
+}
+.verify-card.invalid .verify-icon{background:linear-gradient(135deg,#703b38,#a4544f);color:#fff}
+.verify-card h1{margin:0;color:#12373d;font-size:32px;letter-spacing:-.025em}
+.verify-intro{max-width:560px;margin:14px auto 0;color:#4d6366;line-height:1.6}
+.verify-card dl{
+  text-align:left;display:grid;grid-template-columns:155px 1fr;gap:12px 18px;margin:30px 0 24px;
+  padding:22px 24px;background:linear-gradient(135deg,#f5f9f8,#fbfaf6);border-radius:18px;
+  border:1px solid #e5eeee;box-shadow:inset 4px 0 0 #c5983b
+}
+.verify-card dt{font-size:11px;font-weight:900;color:#748c8f;text-transform:uppercase;letter-spacing:.08em}
+.verify-card dd{margin:0;font-weight:650;color:#16383d}
+.verify-code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:.025em}
+.verify-state-text{color:#08756f;font-weight:800}
+.verify-card.invalid .verify-state-text{color:#8c4b47}
+.verify-qr-wrap{
+  display:inline-flex;flex-direction:column;align-items:center;gap:7px;margin:0 auto 8px;
+  padding:14px 16px 11px;border-radius:18px;background:#fff;border:1px solid #edf1ef;
+  box-shadow:0 12px 34px rgba(5,61,71,.08)
+}
+.verify-qr{width:154px;height:154px;object-fit:contain;margin:0;display:block;border:0;box-shadow:none}
+.verify-qr-wrap span{font-size:9px;text-transform:uppercase;letter-spacing:.16em;color:#819497;font-weight:800}
+.verify-search{margin:24px 0 14px;text-align:left;padding-top:22px;border-top:1px solid #e5eeee}
+.verify-search label{display:block;font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.08em;color:#6d8588;margin-bottom:8px}
+.verify-search-row{display:grid;grid-template-columns:1fr auto;gap:10px}
+.verify-search input{
+  min-width:0;border:1px solid #cbdada;border-radius:13px;padding:13px 14px;font:inherit;color:#0a2a30;background:#fff
+}
+.verify-search input:focus{outline:3px solid rgba(49,158,165,.18);border-color:#319ea5}
+.verify-privacy{font-size:12px;line-height:1.5;max-width:560px;margin:14px auto 18px}
+.verify-home{display:inline-flex}
+.verify-values{
+  margin:28px -42px -34px;padding:16px 24px;display:flex;justify-content:center;gap:28px;flex-wrap:wrap;
+  background:linear-gradient(90deg,#073f49,#075f66);color:#e8d2a0;border-top:1px solid rgba(197,152,59,.45)
+}
+.verify-values span{font-size:9px;font-weight:900;letter-spacing:.17em;text-transform:uppercase}
+.verify-footer{text-align:center;margin-top:16px;color:#61787a;font-size:9px;font-weight:800;letter-spacing:.12em}
+@media(max-width:700px){
+  .verify-page{padding:22px 12px}.verify-brandbar{padding:16px 18px;align-items:flex-start}
+  .verify-brand-copy{display:none}.verify-card{padding:30px 22px 28px}.verify-topline{align-items:flex-start}
+  .verify-card .page-kicker{font-size:9px}.verify-card h1{font-size:27px}
+  .verify-card dl{grid-template-columns:1fr;gap:5px;padding:18px}.verify-card dd{margin-bottom:9px}
+  .verify-search-row{grid-template-columns:1fr}.verify-search-row .btn{width:100%}
+  .verify-values{margin:26px -22px -28px;gap:14px 20px}.verify-wordmark-text strong{font-size:20px}
+}
