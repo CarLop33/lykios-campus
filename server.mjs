@@ -32,8 +32,8 @@ const STRIPE_API_BASE = 'https://api.stripe.com/v1';
 const MAIL_FROM = process.env.LYKIOS_MAIL_FROM || 'campus@lykiosacademy.com';
 const MAIL_FROM_NAME = process.env.LYKIOS_MAIL_FROM_NAME || 'Lykios Academy Campus';
 const MAIL_REPLY_TO = process.env.LYKIOS_MAIL_REPLY_TO || MAIL_FROM;
-const ZOHO_CPAAS_SEND_TOKEN = process.env.ZOHO_CPAAS_SEND_TOKEN || '';
-const ZOHO_CPAAS_API_BASE = (process.env.ZOHO_CPAAS_API_BASE || 'https://cpaas.zoho.com/v1.1').replace(/\/$/,'');
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+const RESEND_API_BASE = 'https://api.resend.com';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const UPLOAD_DIR = process.env.LYKIOS_UPLOAD_DIR || (process.env.VERCEL ? '/tmp/lykios-uploads' : path.join(__dirname, 'uploads'));
 const FILE_BACKEND = process.env.LYKIOS_FILE_BACKEND || (process.env.VERCEL ? 'blob' : 'fs');
@@ -917,13 +917,13 @@ function queueEmail(db,{to,type,userId=null,courseId=null,meta={}}){
   const user=userId?db.users.find(u=>u.id===userId):null;
   const course=courseId?db.courses.find(c=>c.id===courseId):null;
   const tpl=mailTemplate(type,{firstName:user?.firstName||meta.firstName,courseTitle:course?.title||meta.courseTitle,orderNumber:meta.orderNumber,certificateCode:meta.certificateCode,resetUrl:meta.resetUrl});
-  const item={id:newId(),to:cleanText(to,220).toLowerCase(),type,subject:tpl.subject,html:tpl.html,status:'queued',provider:'zoho_cpaas',userId,courseId,meta,createdAt:now(),sentAt:null,attempts:0,lastError:null,providerRequestId:null};
+  const item={id:newId(),to:cleanText(to,220).toLowerCase(),type,subject:tpl.subject,html:tpl.html,status:'queued',provider:'resend',userId,courseId,meta,createdAt:now(),sentAt:null,attempts:0,lastError:null,providerRequestId:null};
   db.emailOutbox ||= []; db.emailOutbox.push(item); return item;
 }
-// Compatibilidad con llamadas existentes: ya no finge que el correo se envió.
-// La entrega real se realiza desde writeDb() mediante flushEmailOutbox().
+// Compatibilidad con llamadas existentes: ya no marca falsamente los correos como enviados.
+// La entrega real se procesa en writeDb() mediante flushEmailOutbox().
 function markLocalEmailsSent(db){
-  for(const e of (db.emailOutbox||[])) if(e.status==='queued') e.provider='zoho_cpaas';
+  for(const e of (db.emailOutbox||[])) if(e.status==='queued') e.provider='resend';
 }
 function emailTextFallback(html=''){
   return String(html)
@@ -939,52 +939,47 @@ function emailTextFallback(html=''){
     .replace(/[ \t]{2,}/g,' ')
     .trim();
 }
-async function sendEmailViaZohoCpaas(item){
-  if(!ZOHO_CPAAS_SEND_TOKEN) return {sent:false,configured:false};
-  const body={
-    from:{address:MAIL_FROM,name:MAIL_FROM_NAME},
-    to:[{email_address:{address:item.to}}],
-    reply_to:[{address:MAIL_REPLY_TO,name:MAIL_FROM_NAME}],
-    subject:item.subject,
-    htmlbody:item.html,
-    textbody:emailTextFallback(item.html),
-    client_reference:`lykios-${item.id}`,
-    track_opens:false,
-    track_clicks:false
-  };
-  const response=await fetch(`${ZOHO_CPAAS_API_BASE}/email`,{
+async function sendEmailViaResend(item){
+  if(!RESEND_API_KEY) return {sent:false,configured:false};
+  const response=await fetch(`${RESEND_API_BASE}/emails`,{
     method:'POST',
     headers:{
       'content-type':'application/json',
-      'accept':'application/json',
-      'authorization':`Zoho-enczapikey ${ZOHO_CPAAS_SEND_TOKEN}`
+      'authorization':`Bearer ${RESEND_API_KEY}`
     },
-    body:JSON.stringify(body),
+    body:JSON.stringify({
+      from:`${MAIL_FROM_NAME} <${MAIL_FROM}>`,
+      to:[item.to],
+      reply_to:MAIL_REPLY_TO,
+      subject:item.subject,
+      html:item.html,
+      text:emailTextFallback(item.html)
+    }),
     signal:AbortSignal.timeout(12000)
   });
   const raw=await response.text();
   let payload=null;try{payload=raw?JSON.parse(raw):null}catch{}
   if(!response.ok){
-    const message=cleanText(payload?.data?.message||payload?.message||raw||`HTTP ${response.status}`,500);
-    throw new Error(`Zoho CPaaS: ${message}`);
+    const message=cleanText(payload?.message||raw||`HTTP ${response.status}`,500);
+    throw new Error(`Resend: ${message}`);
   }
-  return {sent:true,configured:true,requestId:cleanText(payload?.request_id||'',180)};
+  return {sent:true,configured:true,requestId:cleanText(payload?.id||'',180)};
 }
 async function flushEmailOutbox(db,{limit=12}={}){
   const queued=(db.emailOutbox||[]).filter(e=>e.status==='queued').slice(0,limit);
-  if(!queued.length) return {configured:Boolean(ZOHO_CPAAS_SEND_TOKEN),sent:0,failed:0};
-  if(!ZOHO_CPAAS_SEND_TOKEN) return {configured:false,sent:0,failed:0,queued:queued.length};
+  if(!queued.length) return {configured:Boolean(RESEND_API_KEY),sent:0,failed:0};
+  if(!RESEND_API_KEY) return {configured:false,sent:0,failed:0,queued:queued.length};
   let sent=0,failed=0;
   for(const item of queued){
     item.attempts=(Number(item.attempts)||0)+1;
     item.lastAttemptAt=now();
     try{
-      const result=await sendEmailViaZohoCpaas(item);
+      const result=await sendEmailViaResend(item);
       if(result.sent){
         item.status='sent';
         item.sentAt=now();
         item.lastError=null;
-        item.provider='zoho_cpaas';
+        item.provider='resend';
         item.providerRequestId=result.requestId||null;
         sent++;
       }
@@ -992,7 +987,7 @@ async function flushEmailOutbox(db,{limit=12}={}){
       item.status='failed';
       item.lastError=cleanText(error?.message||String(error),500);
       item.failedAt=now();
-      item.provider='zoho_cpaas';
+      item.provider='resend';
       failed++;
       logEvent('error','transactional_email_failed',{emailId:item.id,type:item.type,error:item.lastError});
     }
