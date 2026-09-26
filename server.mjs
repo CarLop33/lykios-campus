@@ -1689,6 +1689,25 @@ export const handleRequest=async (req,res)=>{
         }
         if(url.pathname==='/api/admin/certificates' && req.method==='GET') return json(res,200,{certificates:db.certificates.slice().sort((a,b)=>new Date(b.issuedAt)-new Date(a.issuedAt)).map(c=>({id:c.id,...publicCertificate(db,c)}))});
         if(url.pathname==='/api/admin/emails' && req.method==='GET') return json(res,200,{emails:emailAdminPayload(db)});
+        if(url.pathname==='/api/admin/email/flush' && req.method==='POST'){
+          await writeDb(db);
+          return json(res,200,{ok:true,emails:emailAdminPayload(db)});
+        }
+        if(url.pathname==='/api/admin/email/retry' && req.method==='POST'){
+          const body=await readBody(req);
+          const email=(db.emailOutbox||[]).find(e=>e.id===cleanText(body.emailId,120));
+          if(!email)return json(res,404,{error:'Correo no encontrado'});
+          if(email.status==='sent')return json(res,409,{error:'Ese correo ya fue enviado'});
+          email.status='queued';
+          email.attempts=0;
+          email.nextAttemptAt=null;
+          email.lastError=null;
+          email.failedAt=null;
+          email.sentAt=null;
+          email.providerRequestId=null;
+          await writeDb(db);
+          return json(res,200,{ok:true,email});
+        }
         if(url.pathname==='/api/admin/analytics' && req.method==='GET') return json(res,200,adminAnalyticsPayload(db));
         if(url.pathname==='/api/admin/email/reminder' && req.method==='POST'){const body=await readBody(req);const student=db.users.find(u=>u.id===body.userId&&u.role==='student');const course=db.courses.find(c=>c.id===body.courseId);if(!student||!course)return json(res,404,{error:'Alumno o curso no encontrado'});const mail=queueEmail(db,{to:student.email,type:'reminder',userId:student.id,courseId:course.id});markLocalEmailsSent(db);await writeDb(db);return json(res,201,{email:mail});}
 
