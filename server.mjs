@@ -20,6 +20,7 @@ const ADMIN_PASSWORD = process.env.LYKIOS_ADMIN_PASSWORD || '';
 const IS_SECURE = IS_PROD || ON_VERCEL;
 const APP_VERSION = process.env.LYKIOS_VERSION || '1.0.0-rc5';
 const APP_ORIGIN = (ON_VERCEL && VERCEL_ENV !== 'production' && process.env.VERCEL_URL) ? `https://${process.env.VERCEL_URL}` : (process.env.LYKIOS_APP_ORIGIN || `http://localhost:${PORT}`);
+const PUBLIC_APP_ORIGIN = (process.env.LYKIOS_PUBLIC_ORIGIN || process.env.LYKIOS_APP_ORIGIN || (IS_PREVIEW ? 'https://lykios-campus-git-preview-carlopsco-projects.vercel.app' : APP_ORIGIN)).replace(/\/$/,'');
 const TRUST_PROXY = process.env.LYKIOS_TRUST_PROXY === '1';
 const DATA_DIR = process.env.LYKIOS_DATA_DIR || (process.env.VERCEL ? '/tmp/lykios-data' : path.join(__dirname, 'data'));
 const DB_FILE = path.join(DATA_DIR, 'db.json');
@@ -746,7 +747,7 @@ async function certificatePdf(cert){
   });
   centered(issueDate,helv,11,166,ink,260,8);
 
-  const verifyOrigin=(process.env.LYKIOS_PUBLIC_ORIGIN||process.env.LYKIOS_APP_ORIGIN||APP_ORIGIN).replace(/\/$/,'');
+  const verifyOrigin=PUBLIC_APP_ORIGIN;
   const verifyUrl=`${verifyOrigin}/verify/${cert.code}`;
 
   leftFit(cert.code,helvBold,10.5,577,126,160,ink,7);
@@ -1033,7 +1034,7 @@ function queueEmail(db,{to,type,userId=null,courseId=null,meta={}}){
   if(!to) return null;
   const user=userId?db.users.find(u=>u.id===userId):null;
   const course=courseId?db.courses.find(c=>c.id===courseId):null;
-  const tpl=mailTemplate(type,{firstName:user?.firstName||meta.firstName,courseTitle:course?.title||meta.courseTitle,orderNumber:meta.orderNumber,certificateCode:meta.certificateCode,resetUrl:meta.resetUrl,campusUrl:process.env.LYKIOS_PUBLIC_ORIGIN||process.env.LYKIOS_APP_ORIGIN||APP_ORIGIN});
+  const tpl=mailTemplate(type,{firstName:user?.firstName||meta.firstName,courseTitle:course?.title||meta.courseTitle,orderNumber:meta.orderNumber,certificateCode:meta.certificateCode,resetUrl:meta.resetUrl,campusUrl:PUBLIC_APP_ORIGIN});
   const item={id:newId(),to:cleanText(to,220).toLowerCase(),type,subject:tpl.subject,html:tpl.html,status:'queued',provider:'resend',userId,courseId,meta,createdAt:now(),sentAt:null,attempts:0,lastError:null,providerRequestId:null};
   db.emailOutbox ||= []; db.emailOutbox.push(item); return item;
 }
@@ -1380,7 +1381,7 @@ export const handleRequest=async (req,res)=>{
           const token=crypto.randomBytes(32).toString('base64url');
           db.passwordResetTokens.push({id:newId(),tokenHash:resetTokenHash(token),userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+60*60*1000).toISOString(),usedAt:null});
           user.passwordResetLastSentAt=now();
-          queueEmail(db,{to:user.email,type:'password_reset',userId:user.id,meta:{resetUrl:`${APP_ORIGIN}/?reset=${encodeURIComponent(token)}`}});
+          queueEmail(db,{to:user.email,type:'password_reset',userId:user.id,meta:{resetUrl:`${PUBLIC_APP_ORIGIN}/?reset=${encodeURIComponent(token)}`}});
           markLocalEmailsSent(db); await writeDb(db);
         }
       }
