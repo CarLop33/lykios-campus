@@ -896,27 +896,144 @@ async function deleteResourceFile(resource){
 
 
 
+function emailEscape(value=''){
+  return String(value)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
+function emailShell({preheader='',title='',body='',ctaLabel='',ctaUrl='',footerNote=''}={}){
+  const safePreheader=emailEscape(preheader);
+  const safeTitle=emailEscape(title);
+  const safeCtaLabel=emailEscape(ctaLabel);
+  const safeCtaUrl=emailEscape(ctaUrl);
+  const safeFooterNote=emailEscape(footerNote);
+  const cta=(ctaLabel&&ctaUrl)?`
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:28px;margin-bottom:8px;">
+      <tr>
+        <td style="background-color:#0f5b61;border-radius:8px;">
+          <a href="${safeCtaUrl}" style="display:inline-block;padding:13px 22px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:20px;font-weight:700;color:#ffffff;text-decoration:none;">${safeCtaLabel}</a>
+        </td>
+      </tr>
+    </table>`:'';
+  return `<!DOCTYPE html>
+<html>
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+  <body style="margin:0;padding:0;background-color:#f3f5f5;">
+    <span style="display:none!important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;overflow:hidden;">${safePreheader}</span>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;background-color:#f3f5f5;">
+      <tr>
+        <td align="center" style="padding:28px 14px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:620px;background-color:#ffffff;border:1px solid #dfe7e7;border-radius:14px;">
+            <tr>
+              <td style="padding:26px 32px 18px 32px;border-bottom:1px solid #e7eded;">
+                <div style="font-family:Georgia,'Times New Roman',serif;font-size:24px;line-height:30px;font-weight:700;letter-spacing:1px;color:#123f43;">LYKIOS ACADEMY</div>
+                <div style="margin-top:4px;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:16px;letter-spacing:1.2px;color:#8a6d3b;">CIENCIA · PRÁCTICA · EXPERIENCIA</div>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:30px 32px 34px 32px;">
+                <h1 style="margin:0 0 18px 0;font-family:Georgia,'Times New Roman',serif;font-size:28px;line-height:35px;font-weight:700;color:#173f43;">${safeTitle}</h1>
+                <div style="font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:25px;color:#334b4d;">${body}</div>
+                ${cta}
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:20px 32px 24px 32px;background-color:#f8faf9;border-top:1px solid #e7eded;border-radius:0 0 14px 14px;">
+                <div style="font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:18px;color:#667b7d;">${safeFooterNote||'Este es un mensaje transaccional de Lykios Academy relacionado con tu cuenta o formación.'}</div>
+                <div style="margin-top:10px;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:16px;color:#8a9697;">Formación médica para un futuro más humano · lykiosacademy.com</div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+}
 function mailTemplate(type,ctx={}){
-  const firstName=cleanText(ctx.firstName||'Alumno',120);
-  const course=cleanText(ctx.courseTitle||'',220);
-  const order=cleanText(ctx.orderNumber||'',80);
-  const code=cleanText(ctx.certificateCode||'',100);
+  const firstName=emailEscape(cleanText(ctx.firstName||'Alumno',120));
+  const course=emailEscape(cleanText(ctx.courseTitle||'',220));
+  const order=emailEscape(cleanText(ctx.orderNumber||'',80));
+  const code=emailEscape(cleanText(ctx.certificateCode||'',100));
   const resetUrl=cleanText(ctx.resetUrl||'',1000);
+  const campusUrl=cleanText(ctx.campusUrl||APP_ORIGIN,1000).replace(/\/$/,'');
   const templates={
-    welcome:{subject:'Bienvenido a Lykios Academy',html:`<h1>Bienvenido, ${firstName}</h1><p>Tu cuenta de Lykios Academy ya está activa.</p><p>Desde tu campus podrás acceder a tus cursos, progreso, evaluaciones y certificados.</p>`},
-    purchase:{subject:`Matrícula confirmada · ${course}`,html:`<h1>Matrícula confirmada</h1><p>Hola ${firstName}, tu acceso a <b>${course}</b> ya está activo.</p><p>Pedido: <b>${order}</b></p><p>Puedes entrar al campus y comenzar cuando quieras.</p>`},
-    password_reset:{subject:'Recupera tu acceso a Lykios Academy',html:`<h1>Recuperar contraseña</h1><p>Hola ${firstName}. Hemos recibido una solicitud para restablecer tu contraseña.</p><p><a href="${resetUrl}">Crear nueva contraseña</a></p><p>Este enlace caduca en 60 minutos.</p>`},
-    course_completed:{subject:`Curso completado · ${course}`,html:`<h1>Curso completado</h1><p>Enhorabuena, ${firstName}. Has completado satisfactoriamente <b>${course}</b>.</p><p>Tu certificado Lykios se genera automáticamente y queda disponible en tu campus para descargarlo y verificarlo.</p>`},
-    certificate:{subject:`Tu certificado Lykios · ${course}`,html:`<h1>Certificado emitido</h1><p>Hola ${firstName}. Tu certificado de <b>${course}</b> ya está disponible.</p><p>Código: <b>${code}</b></p><p>Puedes descargarlo y verificarlo desde tu campus.</p>`},
-    reminder:{subject:`Continúa tu formación · ${course}`,html:`<h1>Tu curso te espera</h1><p>Hola ${firstName}. Tienes pendiente continuar <b>${course}</b>.</p><p>Entra en Lykios Academy y retoma la siguiente clase cuando te venga bien.</p>`}
+    welcome:{
+      subject:'Bienvenido a Lykios Academy',
+      html:emailShell({
+        preheader:'Tu acceso al Campus Lykios ya está activo.',
+        title:'Bienvenido a Lykios Academy',
+        body:`<p style="margin:0 0 16px 0;">Hola <strong>${firstName}</strong>,</p><p style="margin:0 0 16px 0;">Tu cuenta ya está activa. Desde el Campus podrás acceder a tus cursos, seguir tu progreso, realizar evaluaciones y descargar tus certificados.</p><p style="margin:0;">Tu formación queda guardada para que puedas continuar donde la dejaste.</p>`,
+        ctaLabel:'Entrar al Campus',
+        ctaUrl:campusUrl
+      })
+    },
+    purchase:{
+      subject:`Matrícula confirmada · ${cleanText(ctx.courseTitle||'',220)}`,
+      html:emailShell({
+        preheader:`Tu acceso a ${cleanText(ctx.courseTitle||'tu formación',220)} ya está activo.`,
+        title:'Matrícula confirmada',
+        body:`<p style="margin:0 0 16px 0;">Hola <strong>${firstName}</strong>,</p><p style="margin:0 0 16px 0;">Tu acceso a <strong>${course}</strong> ya está activo.</p>${order?`<p style="margin:0 0 16px 0;">Número de pedido: <strong>${order}</strong></p>`:''}<p style="margin:0;">Puedes empezar cuando quieras y tu progreso se guardará automáticamente.</p>`,
+        ctaLabel:'Comenzar mi formación',
+        ctaUrl:campusUrl
+      })
+    },
+    password_reset:{
+      subject:'Recupera tu acceso a Lykios Academy',
+      html:emailShell({
+        preheader:'Enlace seguro para crear una nueva contraseña.',
+        title:'Recuperar contraseña',
+        body:`<p style="margin:0 0 16px 0;">Hola <strong>${firstName}</strong>,</p><p style="margin:0 0 16px 0;">Hemos recibido una solicitud para restablecer la contraseña de tu cuenta.</p><p style="margin:0 0 16px 0;">El enlace es válido durante <strong>60 minutos</strong> y solo puede utilizarse una vez.</p><p style="margin:0;">Si no has solicitado este cambio, puedes ignorar este mensaje; tu contraseña actual seguirá siendo válida.</p>`,
+        ctaLabel:'Crear nueva contraseña',
+        ctaUrl:resetUrl,
+        footerNote:'Por seguridad, Lykios Academy nunca te pedirá tu contraseña por correo electrónico.'
+      })
+    },
+    course_completed:{
+      subject:`Curso completado · ${cleanText(ctx.courseTitle||'',220)}`,
+      html:emailShell({
+        preheader:`Has completado ${cleanText(ctx.courseTitle||'tu curso',220)}.`,
+        title:'Curso completado',
+        body:`<p style="margin:0 0 16px 0;">Enhorabuena, <strong>${firstName}</strong>.</p><p style="margin:0 0 16px 0;">Has completado satisfactoriamente <strong>${course}</strong>.</p><p style="margin:0;">Si el curso incluye certificado, lo encontrarás en tu Campus una vez emitido.</p>`,
+        ctaLabel:'Ver mi progreso',
+        ctaUrl:campusUrl
+      })
+    },
+    certificate:{
+      subject:`Tu certificado Lykios · ${cleanText(ctx.courseTitle||'',220)}`,
+      html:emailShell({
+        preheader:`Tu certificado de ${cleanText(ctx.courseTitle||'formación',220)} ya está disponible.`,
+        title:'Certificado emitido',
+        body:`<p style="margin:0 0 16px 0;">Hola <strong>${firstName}</strong>,</p><p style="margin:0 0 16px 0;">Tu certificado de <strong>${course}</strong> ya está disponible.</p>${code?`<p style="margin:0 0 16px 0;">Código de verificación: <strong>${code}</strong></p>`:''}<p style="margin:0;">Puedes descargarlo desde tu Campus y comprobar su autenticidad cuando lo necesites.</p>`,
+        ctaLabel:'Ver mi certificado',
+        ctaUrl:campusUrl
+      })
+    },
+    reminder:{
+      subject:`Continúa tu formación · ${cleanText(ctx.courseTitle||'',220)}`,
+      html:emailShell({
+        preheader:`Continúa ${cleanText(ctx.courseTitle||'tu formación',220)} donde la dejaste.`,
+        title:'Tu curso te espera',
+        body:`<p style="margin:0 0 16px 0;">Hola <strong>${firstName}</strong>,</p><p style="margin:0 0 16px 0;">Tienes pendiente continuar <strong>${course}</strong>.</p><p style="margin:0;">Cuando vuelvas al Campus podrás retomar tu formación desde el punto en el que la dejaste.</p>`,
+        ctaLabel:'Continuar mi curso',
+        ctaUrl:campusUrl,
+        footerNote:'Mensaje de seguimiento formativo relacionado con un curso en el que estás matriculado.'
+      })
+    }
   };
-  return templates[type]||{subject:'Lykios Academy',html:'<p>Notificación de Lykios Academy.</p>'};
+  return templates[type]||{
+    subject:'Lykios Academy',
+    html:emailShell({title:'Lykios Academy',body:'<p style="margin:0;">Tienes una nueva notificación relacionada con tu cuenta.</p>',ctaLabel:'Entrar al Campus',ctaUrl:campusUrl})
+  };
 }
 function queueEmail(db,{to,type,userId=null,courseId=null,meta={}}){
   if(!to) return null;
   const user=userId?db.users.find(u=>u.id===userId):null;
   const course=courseId?db.courses.find(c=>c.id===courseId):null;
-  const tpl=mailTemplate(type,{firstName:user?.firstName||meta.firstName,courseTitle:course?.title||meta.courseTitle,orderNumber:meta.orderNumber,certificateCode:meta.certificateCode,resetUrl:meta.resetUrl});
+  const tpl=mailTemplate(type,{firstName:user?.firstName||meta.firstName,courseTitle:course?.title||meta.courseTitle,orderNumber:meta.orderNumber,certificateCode:meta.certificateCode,resetUrl:meta.resetUrl,campusUrl:process.env.LYKIOS_PUBLIC_ORIGIN||process.env.LYKIOS_APP_ORIGIN||APP_ORIGIN});
   const item={id:newId(),to:cleanText(to,220).toLowerCase(),type,subject:tpl.subject,html:tpl.html,status:'queued',provider:'resend',userId,courseId,meta,createdAt:now(),sentAt:null,attempts:0,lastError:null,providerRequestId:null};
   db.emailOutbox ||= []; db.emailOutbox.push(item); return item;
 }
