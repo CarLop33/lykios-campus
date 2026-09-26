@@ -1062,7 +1062,8 @@ async function sendEmailViaResend(item){
     method:'POST',
     headers:{
       'content-type':'application/json',
-      'authorization':`Bearer ${RESEND_API_KEY}`
+      'authorization':`Bearer ${RESEND_API_KEY}`,
+      'Idempotency-Key':`lykios-email/${item.id}`
     },
     body:JSON.stringify({
       from:`${MAIL_FROM_NAME} <${MAIL_FROM}>`,
