@@ -128,7 +128,32 @@ async function manualEnroll(id){const courseId=$('#manualCourseSelect')?.value;i
 async function removeEnrollment(id,courseId){if(!confirm('¿Retirar el acceso a este curso? El histórico se conserva.'))return;try{await api(`/api/admin/student/${id}/enrollment/${courseId}`,{method:'DELETE'});toast('Acceso retirado');await refreshAdmin();await openStudent(id)}catch(e){toast(e.message,'error')}}
 async function resetStudentProgress(id,courseId){if(!confirm('¿Reiniciar progreso e intentos de evaluación de este curso? Esta acción no se puede deshacer.'))return;try{await api(`/api/admin/student/${id}/course/${courseId}/reset-progress`,{method:'POST'});toast('Progreso reiniciado');await refreshAdmin();await openStudent(id)}catch(e){toast(e.message,'error')}}
 async function addStudentNote(e,id){e.preventDefault();const note=new FormData(e.target).get('note');try{await api(`/api/admin/student/${id}/note`,{method:'POST',body:JSON.stringify({note})});toast('Nota guardada');await refreshAdmin();await openStudent(id)}catch(err){toast(err.message,'error')}}
-function renderAdminEmails(){const items=state.adminEmails||[];if(!items.length)return '<div class="empty">Todavía no hay emails generados.</div>';return `<div class="cert-table-head"><span>Destinatario</span><span>Tipo</span><span>Asunto</span><span>Estado</span><span>Fecha</span></div>${items.slice(0,30).map(e=>`<div class="cert-table-row"><span><b>${esc(e.studentName||e.to)}</b><small>${esc(e.to)}</small></span><span>${esc(e.type)}</span><span>${esc(e.subject)}</span><span><span class="cert-valid">${esc(e.status)}</span></span><span>${new Date(e.sentAt||e.createdAt).toLocaleString('es-ES')}</span></div>`).join('')}`}
+function renderAdminEmails(){
+  const items=state.adminEmails||[];
+  const toolbar=`<div style="display:flex;justify-content:flex-end;margin:0 0 14px 0;"><button class="secondary" onclick="flushEmailQueue()">Procesar pendientes</button></div>`;
+  if(!items.length)return toolbar+'<div class="empty">Todavía no hay emails generados.</div>';
+  return toolbar+`<div class="cert-table-head"><span>Destinatario</span><span>Tipo</span><span>Asunto</span><span>Estado</span><span>Fecha</span></div>${items.slice(0,30).map(e=>{
+    const retry=e.status==='failed'?`<button class="icon-btn" onclick="retryAdminEmail('${esc(e.id)}')">Reintentar</button>`:'';
+    const when=e.sentAt||e.lastAttemptAt||e.createdAt;
+    return `<div class="cert-table-row"><span><b>${esc(e.studentName||e.to)}</b><small>${esc(e.to)}</small></span><span>${esc(e.type)}</span><span>${esc(e.subject)}</span><span><span class="cert-valid">${esc(e.status)}</span>${retry}</span><span>${new Date(when).toLocaleString('es-ES')}</span></div>`;
+  }).join('')}`;
+}
+async function flushEmailQueue(){
+  try{
+    const r=await api('/api/admin/email/flush',{method:'POST'});
+    state.adminEmails=r.emails||[];
+    toast('Cola de correo procesada');
+    render('admin');
+  }catch(e){toast(e.message,'error')}
+}
+async function retryAdminEmail(emailId){
+  try{
+    await api('/api/admin/email/retry',{method:'POST',body:JSON.stringify({emailId})});
+    toast('Reintento ejecutado');
+    await refreshAdmin();
+    render('admin');
+  }catch(e){toast(e.message,'error')}
+}
 async function sendStudentReminder(userId,courseId){try{await api('/api/admin/email/reminder',{method:'POST',body:JSON.stringify({userId,courseId})});toast('Recordatorio generado');await refreshAdmin();await openStudent(userId)}catch(e){toast(e.message,'error')}}
 function renderAdminOrders(){const items=state.adminCommerce?.orders||[];if(!items.length)return '<div class="empty">Todavía no hay pedidos.</div>';return `<div class="cert-table-head"><span>Pedido</span><span>Alumno</span><span>Curso</span><span>Total</span><span>Estado</span></div>${items.map(o=>`<div class="cert-table-row"><span><b>${esc(o.number)}</b><small>${new Date(o.createdAt).toLocaleString('es-ES')}</small></span><span>${esc(o.studentName)}<small>${esc(o.email)}</small></span><span>${esc(o.courseTitle)}</span><span>${esc(o.totalLabel)}</span><span><span class="cert-valid">${esc(o.status)}</span></span></div>`).join('')}`};
 function renderAdminCertificates(){const items=state.adminCertificates||[];if(!items.length)return '<div class="empty">Todavía no hay certificados emitidos.</div>';return `<div class="cert-table-head"><span>Alumno</span><span>Curso</span><span>Código</span><span>Estado</span><span></span></div>${items.map(c=>`<div class="cert-table-row"><span><b>${esc(c.studentName)}</b><small>${new Date(c.issuedAt).toLocaleDateString('es-ES')}</small></span><span>${esc(c.courseTitle)}</span><span><a target="_blank" href="/verify/${encodeURIComponent(c.code)}">${esc(c.code)}</a></span><span>${c.status==='valid'?'<span class="cert-valid">Válido</span>':'<span class="cert-revoked">Revocado</span>'}</span><span>${c.status==='valid'?`<button class="icon-btn danger-soft" onclick="revokeCertificate('${c.id}')">Revocar</button>`:''}</span></div>`).join('')}`};
@@ -185,7 +210,7 @@ const SAFE_CLICK_ACTIONS=new Set([
   'openTutorSource','sendTutorFeedback','openBundleForm','openCouponForm','openPromotionForm',
   'deleteMonetization','closeDrawer','openTeacherModuleForm','openTeacherLessonForm','openCourseForm',
   'openTeacherAdminForm','unassignTeacher','assignTeacher','openStudent','toggleStudentStatus',
-  'manualEnroll','removeEnrollment','sendStudentReminder','resetStudentProgress','revokeCertificate',
+  'manualEnroll','removeEnrollment','sendStudentReminder','flushEmailQueue','retryAdminEmail','resetStudentProgress','revokeCertificate',
   'toggleCourseStatus','deleteCourse','openModuleForm','openAssessmentForm','toggleModuleStatus',
   'deleteModule','openLessonForm','deleteResource','deleteTestVideo','toggleLessonStatus','deleteLesson',
   'openQuestionForm','deleteQuestion','deleteAssessment','reopenAssessment','renderCourse'
@@ -254,5 +279,5 @@ document.addEventListener('click',event=>{
 
 window.addEventListener('beforeunload',()=>{const a=activeLessonVideo;if(!a?.element?.duration)return;try{navigator.sendBeacon?.('/api/video/progress',new Blob([JSON.stringify({lessonId:a.lessonId,videoId:a.videoId,currentTime:a.element.currentTime,duration:a.element.duration})],{type:'application/json'}))}catch{}})
 function render(route){if(route==='store')return openStore();if(route==='login'||!state.me)return renderLogin();({dashboard:renderDashboard,courses:renderCourses,course:renderCourse,lesson:renderLesson,assessment:renderAssessment,profile:renderProfile,teacher:renderTeacher,admin:renderAdmin}[route]||renderDashboard)()}
-Object.assign(window,{render,issueCertificate,revokeCertificate,setRoute,openCourse,logout,openStore,openForgotPassword,forgotPassword,renderResetPassword,resetPassword,openCheckout,validateCoupon,checkoutMock,checkoutReal,confirmPaymentReturn,openStudent,saveStudentProfile,toggleStudentStatus,manualEnroll,removeEnrollment,resetStudentProgress,addStudentNote,sendStudentReminder,openLesson,initLessonVideo,completeLesson,openAssessment,renderAssessment,openCourseForm,openModuleForm,openLessonForm,openAssessmentForm,openQuestionForm,reopenAssessment,deleteQuestion,deleteAssessment,closeDrawer,toggleCourseStatus,toggleModuleStatus,toggleLessonStatus,deleteCourse,deleteModule,deleteLesson,uploadResource,deleteResource,uploadTestVideo,deleteTestVideo,openBundleForm,saveBundle,openCouponForm,saveCoupon,openPromotionForm,savePromotion,deleteMonetization,renderTeacher,openTeacherModuleForm,openTeacherLessonForm,teacherUploadResource,openTeacherAdminForm,assignTeacher,unassignTeacher,askTutor,sendTutorFeedback,saveTutorPolicy,openTutorSource,state});
+Object.assign(window,{render,issueCertificate,revokeCertificate,setRoute,openCourse,logout,openStore,openForgotPassword,forgotPassword,renderResetPassword,resetPassword,openCheckout,validateCoupon,checkoutMock,checkoutReal,confirmPaymentReturn,openStudent,saveStudentProfile,toggleStudentStatus,manualEnroll,removeEnrollment,resetStudentProgress,addStudentNote,sendStudentReminder,flushEmailQueue,retryAdminEmail,openLesson,initLessonVideo,completeLesson,openAssessment,renderAssessment,openCourseForm,openModuleForm,openLessonForm,openAssessmentForm,openQuestionForm,reopenAssessment,deleteQuestion,deleteAssessment,closeDrawer,toggleCourseStatus,toggleModuleStatus,toggleLessonStatus,deleteCourse,deleteModule,deleteLesson,uploadResource,deleteResource,uploadTestVideo,deleteTestVideo,openBundleForm,saveBundle,openCouponForm,saveCoupon,openPromotionForm,savePromotion,deleteMonetization,renderTeacher,openTeacherModuleForm,openTeacherLessonForm,teacherUploadResource,openTeacherAdminForm,assignTeacher,unassignTeacher,askTutor,sendTutorFeedback,saveTutorPolicy,openTutorSource,state});
 setTimeout(()=>bootstrap(),0);
