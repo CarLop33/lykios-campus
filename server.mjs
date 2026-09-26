@@ -966,13 +966,22 @@ async function sendEmailViaResend(item){
   return {sent:true,configured:true,requestId:cleanText(payload?.id||'',180)};
 }
 async function flushEmailOutbox(db,{limit=12}={}){
-  const queued=(db.emailOutbox||[]).filter(e=>e.status==='queued').slice(0,limit);
-  if(!queued.length) return {configured:Boolean(RESEND_API_KEY),sent:0,failed:0};
+  const currentMs=Date.now();
+  const queued=(db.emailOutbox||[])
+    .filter(e=>{
+      if(e.status!=='queued') return false;
+      const nextMs=e.nextAttemptAt?Date.parse(e.nextAttemptAt):0;
+      return !Number.isFinite(nextMs) || nextMs<=currentMs;
+    })
+    .slice(0,limit);
+  if(!queued.length) return {configured:Boolean(RESEND_API_KEY),sent:0,failed:0,deferred:0};
   if(!RESEND_API_KEY) return {configured:false,sent:0,failed:0,queued:queued.length};
-  let sent=0,failed=0;
+  let sent=0,failed=0,deferred=0;
+  const retryDelaysMs=[60_000,5*60_000];
   for(const item of queued){
     item.attempts=(Number(item.attempts)||0)+1;
     item.lastAttemptAt=now();
+    item.nextAttemptAt=null;
     try{
       const result=await sendEmailViaResend(item);
       if(result.sent){
@@ -984,15 +993,24 @@ async function flushEmailOutbox(db,{limit=12}={}){
         sent++;
       }
     }catch(error){
-      item.status='failed';
       item.lastError=cleanText(error?.message||String(error),500);
-      item.failedAt=now();
       item.provider='resend';
-      failed++;
-      logEvent('error','transactional_email_failed',{emailId:item.id,type:item.type,error:item.lastError});
+      if(item.attempts<3){
+        const delayMs=retryDelaysMs[Math.min(item.attempts-1,retryDelaysMs.length-1)];
+        item.status='queued';
+        item.nextAttemptAt=new Date(Date.now()+delayMs).toISOString();
+        deferred++;
+        logEvent('warn','transactional_email_retry_scheduled',{emailId:item.id,type:item.type,attempt:item.attempts,nextAttemptAt:item.nextAttemptAt,error:item.lastError});
+      }else{
+        item.status='failed';
+        item.failedAt=now();
+        item.nextAttemptAt=null;
+        failed++;
+        logEvent('error','transactional_email_failed',{emailId:item.id,type:item.type,attempt:item.attempts,error:item.lastError});
+      }
     }
   }
-  return {configured:true,sent,failed};
+  return {configured:true,sent,failed,deferred};
 }
 function emailAdminPayload(db){return (db.emailOutbox||[]).slice().sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).map(e=>{const u=db.users.find(x=>x.id===e.userId),c=db.courses.find(x=>x.id===e.courseId);return {...e,studentName:u?`${u.firstName} ${u.lastName}`.trim():'',courseTitle:c?.title||''};});}
 function maybeQueueCourseCompleted(db,user,courseId){
