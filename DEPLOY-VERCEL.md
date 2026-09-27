@@ -81,8 +81,9 @@ Este backup cubre el estado PostgreSQL. Los binarios almacenados en Vercel Blob 
 4. Ejecutar smoke test en el deployment candidato.
 5. Confirmar variables Stripe y webhook firmado.
 6. Verificar correo, login, recuperación de contraseña, matrícula, progreso y certificado.
-7. Solo entonces asociar `campus.lykiosacademy.com`.
-8. Ejecutar smoke test de nuevo sobre el dominio final.
+7. Ejecutar una prueba concurrente de checkout, progreso y envío de evaluaciones. Cualquier `STORAGE_CONFLICT` en estas rutas es NO-GO comercial.
+8. Solo entonces asociar `campus.lykiosacademy.com`.
+9. Ejecutar smoke test de nuevo sobre el dominio final.
 
 ## Seguridad
 - No subir `.env`, backups ni credenciales al repositorio.
