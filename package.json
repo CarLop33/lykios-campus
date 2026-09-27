@@ -7,7 +7,7 @@
     "start": "node server.mjs",
     "check": "node --check server.mjs",
     "smoke": "sh scripts/smoke-test.sh",
-    "backup": "sh scripts/backup.sh",
+    "backup": "node scripts/backup-state.mjs",
     "db:import": "node scripts/migrate-json-to-postgres.mjs",
     "db:verify": "node scripts/verify-postgres.mjs",
     "vercel:check": "node --check api/index.mjs && node --check server.mjs && node --check resource-store.mjs",
