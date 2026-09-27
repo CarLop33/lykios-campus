@@ -2,6 +2,17 @@ import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 
+function hardenedDatabaseUrl(value=''){
+  const raw=String(value||'').trim();
+  if(!raw)return raw;
+  try{
+    const url=new URL(raw);
+    const mode=(url.searchParams.get('sslmode')||'').toLowerCase();
+    if(['prefer','require','verify-ca'].includes(mode)) url.searchParams.set('sslmode','verify-full');
+    return url.toString();
+  }catch{return raw}
+}
+
 export function createPersistence({backend='json', dataDir, dbFile, databaseUrl, log=()=>{}}={}){
   let pool=null;
   let jsonChain=Promise.resolve();
@@ -10,7 +21,8 @@ export function createPersistence({backend='json', dataDir, dbFile, databaseUrl,
     if(backend==='postgres'){
       if(!databaseUrl) throw new Error('DATABASE_URL es obligatorio con LYKIOS_STORAGE_BACKEND=postgres');
       const { Pool } = await import('pg');
-      pool = new Pool({ connectionString: databaseUrl, max: 10, idleTimeoutMillis: 30000, connectionTimeoutMillis: 10000 });
+      const connectionString=hardenedDatabaseUrl(databaseUrl);
+      pool = new Pool({ connectionString, max: 10, idleTimeoutMillis: 30000, connectionTimeoutMillis: 10000 });
       await pool.query(`CREATE TABLE IF NOT EXISTS lykios_app_state (
         id smallint PRIMARY KEY CHECK (id = 1),
         version bigint NOT NULL DEFAULT 1,
