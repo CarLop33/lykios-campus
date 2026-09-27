@@ -1413,7 +1413,23 @@ export const handleRequest=async (req,res)=>{
     if(url.pathname==='/api/webhooks/stripe' && req.method==='POST'){
       if(PAYMENT_PROVIDER!=='stripe')return json(res,404,{error:'No disponible'});const raw=await readRawBody(req);if(!verifyStripeWebhook(raw,req.headers['stripe-signature']))return json(res,400,{error:'Firma inválida'});let event;try{event=JSON.parse(raw)}catch{return json(res,400,{error:'Payload inválido'})}const db=await readDb();const result=await handleStripeEvent(db,event);await writeDb(db);logEvent('info','stripe_webhook',{eventId:event.id,type:event.type,result});return json(res,200,{received:true});
     }
-    if(url.pathname==='/api/checkout/mock' && req.method==='POST'){if(IS_PROD)return json(res,404,{error:'No disponible'});const body=await readBody(req);const db=await readDb();const result=checkoutMock(db,body);if(result.error)return json(res,result.status||400,{error:result.error});await writeDb(db);return json(res,201,{ok:true,user:{id:result.user.id,email:result.user.email,firstName:result.user.firstName,role:result.user.role},item:{type:body.itemType==='bundle'?'bundle':'course',slug:result.target.slug,title:result.target.title},order:result.order,enrollments:result.enrollments},{'set-cookie':sessionCookie(result.token)});}
+    if(url.pathname==='/api/checkout/mock' && req.method==='POST'){
+      if(IS_PROD)return json(res,404,{error:'No disponible'});
+      const body=await readBody(req);
+      for(let attempt=0;attempt<3;attempt++){
+        const workDb=await readDb();
+        const result=checkoutMock(workDb,body);
+        if(result.error)return json(res,result.status||400,{error:result.error});
+        try{
+          await writeDb(workDb);
+          return json(res,201,{ok:true,user:{id:result.user.id,email:result.user.email,firstName:result.user.firstName,role:result.user.role},item:{type:body.itemType==='bundle'?'bundle':'course',slug:result.target.slug,title:result.target.title},order:result.order,enrollments:result.enrollments},{'set-cookie':sessionCookie(result.token)});
+        }catch(error){
+          if(error?.code==='STORAGE_CONFLICT'&&attempt<2)continue;
+          throw error;
+        }
+      }
+      return json(res,503,{error:'El Campus está procesando otra matrícula. Inténtalo de nuevo.'});
+    }
     if(url.pathname==='/api/checkout/coupon' && req.method==='POST'){const body=await readBody(req);const db=await readDb();const itemType=body.itemType==='bundle'?'bundle':'course';const target=itemType==='bundle'?(db.bundles||[]).find(b=>b.slug===body.itemSlug):db.courses.find(c=>c.slug===body.itemSlug);if(!target)return json(res,404,{error:'Producto no encontrado'});const pr=pricingFor(db,itemType,target);const user=(body.email?db.users.find(u=>u.email.toLowerCase()===String(body.email).toLowerCase()):null);const r=validateCoupon(db,body.couponCode,{user,targetType:itemType,targetId:target.id,subtotalCents:pr.finalCents});if(r.error)return json(res,r.status||400,{error:r.error});return json(res,200,{ok:true,discountCents:r.discountCents,discountLabel:money(r.discountCents,target.currency||'EUR'),totalCents:Math.max(0,pr.finalCents-r.discountCents),totalLabel:money(Math.max(0,pr.finalCents-r.discountCents),target.currency||'EUR'),coupon:r.coupon?{code:r.coupon.code,label:r.coupon.label||r.coupon.code,category:r.coupon.category||'coupon'}:null});}
 
     if(url.pathname==='/api/password/forgot' && req.method==='POST'){
@@ -1630,37 +1646,50 @@ export const handleRequest=async (req,res)=>{
       }
       if(url.pathname==='/api/assessment/submit' && req.method==='POST'){
         const body=await readBody(req);
-        const assessment=db.assessments.find(a=>a.id===body.assessmentId);
-        if(!assessment || !visibleAssessment(db,user,assessment)) return json(res,404,{error:'Evaluación no disponible'});
-        const prior=db.attempts.filter(a=>a.assessmentId===assessment.id&&a.userId===user.id);
-        if(prior.some(a=>a.passed)) return json(res,409,{error:'Esta evaluación ya está aprobada'});
-        if(assessment.maxAttempts>0 && prior.length>=assessment.maxAttempts) return json(res,409,{error:'Has alcanzado el número máximo de intentos'});
-        const questions=db.questions.filter(q=>q.assessmentId===assessment.id).sort((a,b)=>a.position-b.position);
-        if(!questions.length) return json(res,409,{error:'La evaluación no tiene preguntas'});
-        const answers=body.answers && typeof body.answers==='object' ? body.answers : {};
-        let correct=0;
-        const review=questions.map(q=>{
-          const selected=Number(answers[q.id]);
-          const ok=Number.isInteger(selected)&&selected===q.correctOption;
-          if(ok) correct++;
-          return {questionId:q.id,selectedOption:Number.isInteger(selected)?selected:null,correct:ok,correctOption:q.correctOption,explanation:q.explanation||''};
-        });
-        const score=Math.round(correct/questions.length*100);
-        const passed=score>=assessment.passingScore;
-        const attempt={id:newId(),assessmentId:assessment.id,userId:user.id,score,passed,answers:review,submittedAt:now()};
-        db.attempts.push(attempt);
-        db.activity.push({id:newId(),userId:user.id,type:'assessment_submitted',label:`Evaluación: ${assessment.title} · ${score}%`,at:now()});
-        let assessmentCourseId=null;let lessonCompletion=null;
-        if(assessment.scopeType==='lesson'){const lesson=db.lessons.find(l=>l.id===assessment.scopeId);assessmentCourseId=lesson?.courseId||null;if(lesson)lessonCompletion=syncLessonCompletion(db,user,lesson).status;}
-        else assessmentCourseId=db.modules.find(m=>m.id===assessment.scopeId)?.courseId||null;
-        if(assessmentCourseId) maybeQueueCourseCompleted(db,user,assessmentCourseId); markLocalEmailsSent(db);
-        await writeDb(db);
-        const attemptsUsed=prior.length+1;
-        const attemptsRemaining=assessment.maxAttempts>0?Math.max(0,assessment.maxAttempts-attemptsUsed):null;
-        const revealAnswers=passed||(attemptsRemaining===0);
-        const publicAnswers=review.map(r=>revealAnswers?r:{questionId:r.questionId,selectedOption:r.selectedOption,correct:r.correct});
-        const publicAttempt={...attempt,answers:publicAnswers};
-        return json(res,200,{attempt:publicAttempt,passingScore:assessment.passingScore,attemptsUsed,attemptsRemaining,revealAnswers,lessonCompletion});
+        for(let attemptNo=0;attemptNo<3;attemptNo++){
+          const workDb=attemptNo===0?db:await readDb();
+          const workUser=workDb.users.find(u=>u.id===user.id);
+          const assessment=workDb.assessments.find(a=>a.id===body.assessmentId);
+          if(!workUser||!assessment||!visibleAssessment(workDb,workUser,assessment)) return json(res,404,{error:'Evaluación no disponible'});
+          const prior=workDb.attempts.filter(a=>a.assessmentId===assessment.id&&a.userId===workUser.id);
+          if(prior.some(a=>a.passed)) return json(res,409,{error:'Esta evaluación ya está aprobada'});
+          if(assessment.maxAttempts>0&&prior.length>=assessment.maxAttempts)return json(res,409,{error:'Has alcanzado el número máximo de intentos'});
+          const questions=workDb.questions.filter(q=>q.assessmentId===assessment.id).sort((a,b)=>a.position-b.position);
+          if(!questions.length)return json(res,409,{error:'La evaluación no tiene preguntas'});
+          const answers=body.answers&&typeof body.answers==='object'?body.answers:{};
+          let correct=0;
+          const review=questions.map(q=>{
+            const selected=Number(answers[q.id]);
+            const ok=Number.isInteger(selected)&&selected===q.correctOption;
+            if(ok)correct++;
+            return {questionId:q.id,selectedOption:Number.isInteger(selected)?selected:null,correct:ok,correctOption:q.correctOption,explanation:q.explanation||''};
+          });
+          const score=Math.round(correct/questions.length*100);
+          const passed=score>=assessment.passingScore;
+          const attempt={id:newId(),assessmentId:assessment.id,userId:workUser.id,score,passed,answers:review,submittedAt:now()};
+          workDb.attempts.push(attempt);
+          workDb.activity.push({id:newId(),userId:workUser.id,type:'assessment_submitted',label:`Evaluación: ${assessment.title} · ${score}%`,at:now()});
+          let assessmentCourseId=null,lessonCompletion=null;
+          if(assessment.scopeType==='lesson'){
+            const lesson=workDb.lessons.find(l=>l.id===assessment.scopeId);
+            assessmentCourseId=lesson?.courseId||null;
+            if(lesson)lessonCompletion=syncLessonCompletion(workDb,workUser,lesson).status;
+          }else assessmentCourseId=workDb.modules.find(m=>m.id===assessment.scopeId)?.courseId||null;
+          if(assessmentCourseId)maybeQueueCourseCompleted(workDb,workUser,assessmentCourseId);
+          markLocalEmailsSent(workDb);
+          try{
+            await writeDb(workDb);
+            const attemptsUsed=prior.length+1;
+            const attemptsRemaining=assessment.maxAttempts>0?Math.max(0,assessment.maxAttempts-attemptsUsed):null;
+            const revealAnswers=passed||(attemptsRemaining===0);
+            const publicAnswers=review.map(r=>revealAnswers?r:{questionId:r.questionId,selectedOption:r.selectedOption,correct:r.correct});
+            return json(res,200,{attempt:{...attempt,answers:publicAnswers},passingScore:assessment.passingScore,attemptsUsed,attemptsRemaining,revealAnswers,lessonCompletion});
+          }catch(error){
+            if(error?.code==='STORAGE_CONFLICT'&&attemptNo<2)continue;
+            throw error;
+          }
+        }
+        return json(res,503,{error:'El Campus está registrando otra evaluación. Inténtalo de nuevo.'});
       }
 
       if(url.pathname==='/api/certificate/status' && req.method==='GET'){
