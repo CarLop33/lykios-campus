@@ -1234,7 +1234,7 @@ function validateCoupon(db,code,{user=null,targetType,targetId,subtotalCents=0}=
   if(Number(c.minSubtotalCents)>0&&subtotalCents<Number(c.minSubtotalCents))return {error:'No se alcanza el importe mínimo del cupón',status:400};
   return {coupon:c,discountCents:applyDiscount(subtotalCents,c.discountType,c.value)};
 }
-function checkoutMock(db,body){
+function checkoutMock(db,body,{suppressEmails=false}={}){
   const itemType=body.itemType==='bundle'?'bundle':'course';
   const target=itemType==='bundle'
     ?(db.bundles||[]).find(b=>b.slug===cleanText(body.itemSlug||body.bundleSlug,120)&&b.status==='published'&&b.saleEnabled!==false)
@@ -1263,9 +1263,12 @@ function checkoutMock(db,body){
   for(const course of missingCourses){let enrollment=db.enrollments.find(e=>e.userId===user.id&&e.courseId===course.id);if(enrollment){enrollment.status='active';enrollment.orderId=order.id;}else{enrollment={id:newId(),userId:user.id,courseId:course.id,status:'active',enrolledAt:now(),orderId:order.id};db.enrollments.push(enrollment)}enrollments.push(enrollment);db.activity.push({id:newId(),userId:user.id,type:'enrollment_created',label:`Matrícula activada: ${course.title}`,at:now()});}
   db.orders.push(order); db.payments.push(payment);
   if(couponResult.coupon){db.couponRedemptions.push({id:newId(),couponId:couponResult.coupon.id,userId:user.id,orderId:order.id,discountCents:couponDiscount,redeemedAt:now()});}
-  const isFirstWelcome=!(db.emailOutbox||[]).some(e=>e.userId===user.id&&e.type==='welcome');
-  if(isFirstWelcome) queueEmail(db,{to:user.email,type:'welcome',userId:user.id});
-  queueEmail(db,{to:user.email,type:'purchase',userId:user.id,courseId:missingCourses[0]?.id||null,meta:{orderNumber:order.number,courseTitle:target.title}}); markLocalEmailsSent(db);
+  if(!suppressEmails){
+    const isFirstWelcome=!(db.emailOutbox||[]).some(e=>e.userId===user.id&&e.type==='welcome');
+    if(isFirstWelcome) queueEmail(db,{to:user.email,type:'welcome',userId:user.id});
+    queueEmail(db,{to:user.email,type:'purchase',userId:user.id,courseId:missingCourses[0]?.id||null,meta:{orderNumber:order.number,courseTitle:target.title}});
+    markLocalEmailsSent(db);
+  }
   const token=crypto.randomBytes(32).toString('base64url'); db.sessions.push({id:newId(),tokenHash:sessionTokenHash(token),userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+SESSION_TTL_MS).toISOString()});
   return {user,target,order,payment,enrollments,token};
 }
