@@ -1579,21 +1579,47 @@ export const handleRequest=async (req,res)=>{
         await writeDb(db); return json(res,200,{ok:true});
       }
       if(url.pathname==='/api/progress' && req.method==='POST'){
-        const body=await readBody(req); const lesson=db.lessons.find(l=>l.id===body.lessonId); if(!lesson || lesson.status!=='published') return json(res,404,{error:'Clase no encontrada'});
-        const enrollment=db.enrollments.find(e=>e.userId===user.id && e.courseId===lesson.courseId && e.status==='active'); if(!enrollment) return json(res,403,{error:'Sin matrícula activa'}); if(!canAccessLesson(db,user,lesson))return json(res,403,{error:sequenceState(db,user,lesson).lockReason||'Clase bloqueada'});
-        const requirementStatus=lessonCompletionStatus(db,user,lesson);
-        if(requirementStatus.hasRequirements){
-          const synced=syncLessonCompletion(db,user,lesson);
-          await writeDb(db);
-          return json(res,409,{error:'Esta clase se completa automáticamente al cumplir sus requisitos',completionStatus:synced.status});
+        const body=await readBody(req);
+        for(let attempt=0;attempt<3;attempt++){
+          const workDb=attempt===0?db:await readDb();
+          const workUser=workDb.users.find(u=>u.id===user.id);
+          const lesson=workDb.lessons.find(l=>l.id===body.lessonId);
+          if(!workUser||!lesson||lesson.status!=='published') return json(res,404,{error:'Clase no encontrada'});
+          const enrollment=workDb.enrollments.find(e=>e.userId===workUser.id&&e.courseId===lesson.courseId&&e.status==='active');
+          if(!enrollment)return json(res,403,{error:'Sin matrícula activa'});
+          if(!canAccessLesson(workDb,workUser,lesson))return json(res,403,{error:sequenceState(workDb,workUser,lesson).lockReason||'Clase bloqueada'});
+          const requirementStatus=lessonCompletionStatus(workDb,workUser,lesson);
+          if(requirementStatus.hasRequirements){
+            const synced=syncLessonCompletion(workDb,workUser,lesson);
+            try{
+              await writeDb(workDb);
+              return json(res,409,{error:'Esta clase se completa automáticamente al cumplir sus requisitos',completionStatus:synced.status});
+            }catch(error){
+              if(error?.code==='STORAGE_CONFLICT'&&attempt<2)continue;
+              throw error;
+            }
+          }
+          let p=workDb.progress.find(x=>x.enrollmentId===enrollment.id&&x.lessonId===lesson.id);
+          if(!p){p={id:newId(),enrollmentId:enrollment.id,lessonId:lesson.id,completed:false,progressPercent:0,updatedAt:now()};workDb.progress.push(p)}
+          const before=Boolean(p.completed);
+          p.completed=body.completed!==false;
+          p.progressPercent=p.completed?100:Number(body.progressPercent||0);
+          p.updatedAt=now();
+          if(p.completed&&!p.completedAt)p.completedAt=now();
+          if(!p.completed)p.completedAt=null;
+          if(p.completed&&!before)workDb.activity.push({id:newId(),userId:workUser.id,type:'lesson_completed',label:`Clase ${lesson.code} completada`,at:now()});
+          maybeQueueCourseCompleted(workDb,workUser,lesson.courseId);
+          markLocalEmailsSent(workDb);
+          try{
+            await writeDb(workDb);
+            const course=workDb.courses.find(c=>c.id===lesson.courseId);
+            return json(res,200,{ok:true,progress:p,course:coursePayload(workDb,workUser,course.slug)});
+          }catch(error){
+            if(error?.code==='STORAGE_CONFLICT'&&attempt<2)continue;
+            throw error;
+          }
         }
-        let p=db.progress.find(x=>x.enrollmentId===enrollment.id&&x.lessonId===lesson.id);
-        if(!p){ p={id:newId(),enrollmentId:enrollment.id,lessonId:lesson.id,completed:false,progressPercent:0,updatedAt:now()}; db.progress.push(p); }
-        const before=Boolean(p.completed);p.completed=body.completed!==false; p.progressPercent=p.completed?100:Number(body.progressPercent||0); p.updatedAt=now(); if(p.completed&&!p.completedAt)p.completedAt=now();
-        if(!p.completed)p.completedAt=null;
-        if(p.completed&&!before)db.activity.push({id:newId(),userId:user.id,type:'lesson_completed',label:`Clase ${lesson.code} completada`,at:now()});
-        maybeQueueCourseCompleted(db,user,lesson.courseId); markLocalEmailsSent(db);
-        await writeDb(db); return json(res,200,{ok:true,progress:p,course:coursePayload(db,user,db.courses.find(c=>c.id===lesson.courseId).slug)});
+        return json(res,503,{error:'El Campus está sincronizando tu progreso. Inténtalo de nuevo.'});
       }
 
       if(url.pathname==='/api/assessment' && req.method==='GET'){
@@ -1679,17 +1705,32 @@ export const handleRequest=async (req,res)=>{
         return json(res,200,{token,expiresAt,videoId:selected.id,name:selected.name,streamUrl,progress:videoProgressPayload(db,user,lesson.id,selected.id)});
       }
       if(url.pathname==='/api/video/progress' && req.method==='POST'){
-        const body=await readBody(req); const lesson=db.lessons.find(l=>l.id===body.lessonId);
-        if(!lesson || !canAccessLesson(db,user,lesson)) return json(res,403,{error:'Sin acceso a esta clase'});
-        const videos=lessonVideos(lesson);const selected=body.videoId?videos.find(v=>v.id===body.videoId):videos[0];if(!selected)return json(res,404,{error:'Vídeo no encontrado'});
+        const body=await readBody(req);
         const currentTime=Math.max(0,Number(body.currentTime)||0), duration=Math.max(0,Number(body.duration)||0);
         const percent=duration>0?Math.min(100,Math.round(currentTime/duration*100)):0;
-        let vp=db.videoProgress.find(x=>x.userId===user.id&&x.lessonId===lesson.id&&String(x.videoId||'')===String(selected.id));
-        if(!vp){vp={id:newId(),userId:user.id,lessonId:lesson.id,videoId:selected.id,currentTime:0,duration:0,percent:0,completed:false,lastPlayedAt:null};db.videoProgress.push(vp)}
-        vp.currentTime=currentTime; vp.duration=duration; vp.percent=Math.max(vp.percent||0,percent); vp.completed=vp.completed||percent>=90; vp.lastPlayedAt=now();
-        const completion=syncLessonCompletion(db,user,lesson);
-        if(completion.completed)maybeQueueCourseCompleted(db,user,lesson.courseId);markLocalEmailsSent(db);
-        await writeDb(db); return json(res,200,{progress:videoProgressPayload(db,user,lesson.id,selected.id),lessonVideoProgress:videoProgressPayload(db,user,lesson.id),lessonCompletion:completion.status});
+        for(let attempt=0;attempt<3;attempt++){
+          const workDb=attempt===0?db:await readDb();
+          const workUser=workDb.users.find(u=>u.id===user.id);
+          const lesson=workDb.lessons.find(l=>l.id===body.lessonId);
+          if(!workUser||!lesson||!canAccessLesson(workDb,workUser,lesson)) return json(res,403,{error:'Sin acceso a esta clase'});
+          const videos=lessonVideos(lesson);
+          const selected=body.videoId?videos.find(v=>v.id===body.videoId):videos[0];
+          if(!selected)return json(res,404,{error:'Vídeo no encontrado'});
+          let vp=workDb.videoProgress.find(x=>x.userId===workUser.id&&x.lessonId===lesson.id&&String(x.videoId||'')===String(selected.id));
+          if(!vp){vp={id:newId(),userId:workUser.id,lessonId:lesson.id,videoId:selected.id,currentTime:0,duration:0,percent:0,completed:false,lastPlayedAt:null};workDb.videoProgress.push(vp)}
+          vp.currentTime=currentTime; vp.duration=duration; vp.percent=Math.max(vp.percent||0,percent); vp.completed=vp.completed||percent>=90; vp.lastPlayedAt=now();
+          const completion=syncLessonCompletion(workDb,workUser,lesson);
+          if(completion.completed)maybeQueueCourseCompleted(workDb,workUser,lesson.courseId);
+          markLocalEmailsSent(workDb);
+          try{
+            await writeDb(workDb);
+            return json(res,200,{progress:videoProgressPayload(workDb,workUser,lesson.id,selected.id),lessonVideoProgress:videoProgressPayload(workDb,workUser,lesson.id),lessonCompletion:completion.status});
+          }catch(error){
+            if(error?.code==='STORAGE_CONFLICT'&&attempt<2)continue;
+            throw error;
+          }
+        }
+        return json(res,503,{error:'El Campus está sincronizando tu progreso. Inténtalo de nuevo.'});
       }
       if(url.pathname==='/api/resource' && req.method==='GET'){
         const found=findResource(db,url.searchParams.get('id')); if(!found) return json(res,404,{error:'Recurso no encontrado'});
