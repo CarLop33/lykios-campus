@@ -82,8 +82,13 @@ if (IS_PROD) securityHeaders['strict-transport-security']='max-age=31536000; inc
 function requestId(req){ return cleanText(req.headers['x-request-id'] || req.headers['x-vercel-id'] || crypto.randomUUID(),120); }
 function logEvent(level,event,data={}){ console[level==='error'?'error':'log'](JSON.stringify({ts:new Date().toISOString(),level,event,version:APP_VERSION,...data})); }
 function clientIp(req){
-  if(TRUST_PROXY){ const x=String(req.headers['x-forwarded-for']||'').split(',')[0].trim(); if(x)return x; }
-  return req.socket.remoteAddress || 'unknown';
+  if(ON_VERCEL||TRUST_PROXY){
+    const forwarded=String(req.headers['x-forwarded-for']||'').split(',')[0].trim();
+    if(forwarded)return cleanText(forwarded,80);
+    const real=String(req.headers['x-real-ip']||'').trim();
+    if(real)return cleanText(real,80);
+  }
+  return cleanText(req.socket.remoteAddress||'unknown',80);
 }
 const rateBuckets=new Map();
 function rateLimit(key,limit,windowMs){
@@ -1430,8 +1435,20 @@ export const handleRequest=async (req,res)=>{
       return json(res,503,{error:'El Campus está procesando otra operación. Inténtalo de nuevo.'});
     }
     if(url.pathname==='/api/logout' && req.method==='POST'){
-      const db=await readDb(); const sid=parseCookies(req).lykios_session; db.sessions=db.sessions.filter(s=>s.token!==sid); await writeDb(db);
-      return json(res,200,{ok:true},{'set-cookie':sessionCookie('',0)});
+      const sid=parseCookies(req).lykios_session;
+      if(!sid)return json(res,200,{ok:true},{'set-cookie':sessionCookie('',0)});
+      for(let attempt=0;attempt<3;attempt++){
+        const db=await readDb();
+        db.sessions=db.sessions.filter(s=>s.token!==sid);
+        try{
+          await writeDb(db);
+          return json(res,200,{ok:true},{'set-cookie':sessionCookie('',0)});
+        }catch(err){
+          if(err?.code==='STORAGE_CONFLICT'&&attempt<2)continue;
+          throw err;
+        }
+      }
+      return json(res,503,{error:'El Campus está procesando otra operación. Inténtalo de nuevo.'},{'set-cookie':sessionCookie('',0)});
     }
 
     if((url.pathname==='/verify'||url.pathname==='/api/verify') && req.method==='GET'){
