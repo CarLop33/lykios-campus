@@ -1273,6 +1273,79 @@ function checkoutMock(db,body,{suppressEmails=false}={}){
   return {user,target,order,payment,enrollments,token};
 }
 
+async function performMockCheckout(body,{suppressEmails=false}={}){
+  for(let attempt=0;attempt<3;attempt++){
+    const workDb=await readDb();
+    const result=checkoutMock(workDb,body,{suppressEmails});
+    if(result.error)return {status:result.status||400,body:{error:result.error}};
+    try{
+      await writeDb(workDb);
+      return {
+        status:201,
+        body:{
+          ok:true,
+          user:{id:result.user.id,email:result.user.email,firstName:result.user.firstName,role:result.user.role},
+          item:{type:body.itemType==='bundle'?'bundle':'course',slug:result.target.slug,title:result.target.title},
+          order:result.order,
+          enrollments:result.enrollments
+        },
+        token:result.token
+      };
+    }catch(error){
+      if(error?.code==='STORAGE_CONFLICT'&&attempt<2)continue;
+      throw error;
+    }
+  }
+  return {status:503,body:{error:'El Campus está procesando otra matrícula. Inténtalo de nuevo.'}};
+}
+
+async function performAssessmentSubmit(userId,body){
+  for(let attemptNo=0;attemptNo<3;attemptNo++){
+    const workDb=await readDb();
+    const workUser=workDb.users.find(u=>u.id===userId);
+    const assessment=workDb.assessments.find(a=>a.id===body.assessmentId);
+    if(!workUser||!assessment||!visibleAssessment(workDb,workUser,assessment))return {status:404,body:{error:'Evaluación no disponible'}};
+    const prior=workDb.attempts.filter(a=>a.assessmentId===assessment.id&&a.userId===workUser.id);
+    if(prior.some(a=>a.passed))return {status:409,body:{error:'Esta evaluación ya está aprobada'}};
+    if(assessment.maxAttempts>0&&prior.length>=assessment.maxAttempts)return {status:409,body:{error:'Has alcanzado el número máximo de intentos'}};
+    const questions=workDb.questions.filter(q=>q.assessmentId===assessment.id).sort((a,b)=>a.position-b.position);
+    if(!questions.length)return {status:409,body:{error:'La evaluación no tiene preguntas'}};
+    const answers=body.answers&&typeof body.answers==='object'?body.answers:{};
+    let correct=0;
+    const review=questions.map(q=>{
+      const selected=Number(answers[q.id]);
+      const ok=Number.isInteger(selected)&&selected===q.correctOption;
+      if(ok)correct++;
+      return {questionId:q.id,selectedOption:Number.isInteger(selected)?selected:null,correct:ok,correctOption:q.correctOption,explanation:q.explanation||''};
+    });
+    const score=Math.round(correct/questions.length*100);
+    const passed=score>=assessment.passingScore;
+    const attempt={id:newId(),assessmentId:assessment.id,userId:workUser.id,score,passed,answers:review,submittedAt:now()};
+    workDb.attempts.push(attempt);
+    workDb.activity.push({id:newId(),userId:workUser.id,type:'assessment_submitted',label:`Evaluación: ${assessment.title} · ${score}%`,at:now()});
+    let assessmentCourseId=null,lessonCompletion=null;
+    if(assessment.scopeType==='lesson'){
+      const lesson=workDb.lessons.find(l=>l.id===assessment.scopeId);
+      assessmentCourseId=lesson?.courseId||null;
+      if(lesson)lessonCompletion=syncLessonCompletion(workDb,workUser,lesson).status;
+    }else assessmentCourseId=workDb.modules.find(m=>m.id===assessment.scopeId)?.courseId||null;
+    if(assessmentCourseId)maybeQueueCourseCompleted(workDb,workUser,assessmentCourseId);
+    markLocalEmailsSent(workDb);
+    try{
+      await writeDb(workDb);
+      const attemptsUsed=prior.length+1;
+      const attemptsRemaining=assessment.maxAttempts>0?Math.max(0,assessment.maxAttempts-attemptsUsed):null;
+      const revealAnswers=passed||(attemptsRemaining===0);
+      const publicAnswers=review.map(r=>revealAnswers?r:{questionId:r.questionId,selectedOption:r.selectedOption,correct:r.correct});
+      return {status:200,body:{attempt:{...attempt,answers:publicAnswers},passingScore:assessment.passingScore,attemptsUsed,attemptsRemaining,revealAnswers,lessonCompletion}};
+    }catch(error){
+      if(error?.code==='STORAGE_CONFLICT'&&attemptNo<2)continue;
+      throw error;
+    }
+  }
+  return {status:503,body:{error:'El Campus está registrando otra evaluación. Inténtalo de nuevo.'}};
+}
+
 function prepareCheckout(db,body){
   const itemType=body.itemType==='bundle'?'bundle':'course';
   const target=itemType==='bundle'
