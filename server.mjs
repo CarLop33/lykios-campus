@@ -1952,6 +1952,83 @@ export const handleRequest=async (req,res)=>{
         if(url.pathname==='/api/admin/summary' && req.method==='GET'){
           return json(res,200,{students:db.users.filter(u=>u.role==='student').length,courses:db.courses.length,lessons:db.lessons.length,enrollments:db.enrollments.length,publishedCourses:db.courses.filter(c=>c.status==='published').length,draftCourses:db.courses.filter(c=>c.status==='draft').length,assessments:db.assessments.length,publishedAssessments:db.assessments.filter(a=>a.status==='published').length,attempts:db.attempts.length,certificates:db.certificates.length,validCertificates:db.certificates.filter(c=>c.status!=='revoked').length});
         }
+        if(url.pathname==='/api/admin/test/concurrency' && req.method==='POST'){
+          if(!IS_PREVIEW)return json(res,404,{error:'Disponible solo en Preview'});
+          const runId=crypto.randomBytes(6).toString('hex');
+          const email=`concurrency-${runId}@example.invalid`;
+          const password=`LykiosTest-${runId}-Aa1!`;
+
+          const base=await readDb();
+          const assessment=base.assessments.find(a=>{
+            if(a.status!=='published'||Number(a.passingScore)<=0)return false;
+            const qs=base.questions.filter(q=>q.assessmentId===a.id);
+            if(!qs.length||qs.some(q=>!Array.isArray(q.options)||q.options.length<2))return false;
+            const courseId=a.scopeType==='lesson'
+              ?base.lessons.find(l=>l.id===a.scopeId)?.courseId
+              :base.modules.find(m=>m.id===a.scopeId)?.courseId;
+            const course=base.courses.find(c=>c.id===courseId);
+            return Boolean(course&&course.status==='published'&&course.saleEnabled!==false);
+          });
+          if(!assessment)return json(res,409,{error:'No hay una evaluación publicada adecuada para la prueba concurrente'});
+
+          const assessmentCourseId=assessment.scopeType==='lesson'
+            ?base.lessons.find(l=>l.id===assessment.scopeId)?.courseId
+            :base.modules.find(m=>m.id===assessment.scopeId)?.courseId;
+          const course=base.courses.find(c=>c.id===assessmentCourseId);
+          if(!course)return json(res,409,{error:'No se encontró el curso de prueba'});
+
+          const checkoutBody={itemType:'course',itemSlug:course.slug,email,firstName:'Concurrency',lastName:'Test',password};
+          let checkoutA,checkoutB,assessmentA,assessmentB,verification,cleaned=false;
+          try{
+            [checkoutA,checkoutB]=await Promise.all([
+              performMockCheckout(checkoutBody,{suppressEmails:true}),
+              performMockCheckout(checkoutBody,{suppressEmails:true})
+            ]);
+
+            const afterCheckout=await readDb();
+            const syntheticUser=afterCheckout.users.find(u=>u.email===email);
+            if(!syntheticUser)throw new Error('La prueba no pudo crear el alumno sintético');
+
+            const visible=visibleAssessment(afterCheckout,syntheticUser,afterCheckout.assessments.find(a=>a.id===assessment.id));
+            if(!visible)throw new Error('La evaluación de prueba no quedó accesible para el alumno sintético');
+
+            const questions=afterCheckout.questions.filter(q=>q.assessmentId===assessment.id);
+            const wrongAnswers=Object.fromEntries(questions.map(q=>[
+              q.id,
+              (Number(q.correctOption)+1)%q.options.length
+            ]));
+
+            [assessmentA,assessmentB]=await Promise.all([
+              performAssessmentSubmit(syntheticUser.id,{assessmentId:assessment.id,answers:wrongAnswers}),
+              performAssessmentSubmit(syntheticUser.id,{assessmentId:assessment.id,answers:wrongAnswers})
+            ]);
+
+            const verifiedDb=await readDb();
+            const user=verifiedDb.users.find(u=>u.email===email);
+            const orders=user?verifiedDb.orders.filter(o=>o.userId===user.id&&o.provider==='mock'):[];
+            const enrollments=user?verifiedDb.enrollments.filter(e=>e.userId===user.id&&e.courseId===course.id&&e.status==='active'):[];
+            const attempts=user?verifiedDb.attempts.filter(a=>a.userId===user.id&&a.assessmentId===assessment.id):[];
+            const allowedAttempts=assessment.maxAttempts>0?Math.min(2,assessment.maxAttempts):2;
+            const checkoutPassed=orders.length===1&&enrollments.length===1&&[checkoutA.status,checkoutB.status].filter(x=>x===201).length===1;
+            const assessmentPassed=attempts.length===allowedAttempts&&attempts.every(a=>!a.passed);
+            verification={
+              checkoutPassed,
+              assessmentPassed,
+              orders:orders.length,
+              activeEnrollments:enrollments.length,
+              assessmentAttempts:attempts.length,
+              expectedAssessmentAttempts:allowedAttempts,
+              checkoutStatuses:[checkoutA.status,checkoutB.status],
+              assessmentStatuses:[assessmentA.status,assessmentB.status]
+            };
+          }finally{
+            cleaned=await cleanupSyntheticTestUser(email);
+          }
+
+          const passed=Boolean(verification?.checkoutPassed&&verification?.assessmentPassed&&cleaned);
+          logEvent(passed?'info':'error','concurrency_self_test',{runId,passed,verification,cleaned});
+          return json(res,passed?200:500,{ok:passed,runId,verification,cleaned});
+        }
         if(url.pathname==='/api/admin/content' && req.method==='GET') return json(res,200,{courses:adminContentPayload(db)});
         if(url.pathname==='/api/admin/teachers'&&req.method==='GET'){const teachers=db.users.filter(u=>u.role==='teacher').map(t=>({...t,passwordHash:undefined,passwordSalt:undefined,assignments:(db.teacherAssignments||[]).filter(a=>a.teacherId===t.id).map(a=>({id:a.id,courseId:a.courseId,courseTitle:db.courses.find(c=>c.id===a.courseId)?.title||'Curso'}))}));return json(res,200,{teachers,courses:db.courses.map(c=>({id:c.id,title:c.title}))});}
         if(url.pathname==='/api/admin/tutor/audit'&&req.method==='GET')return json(res,200,tutorAuditPayload(db));
