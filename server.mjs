@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createPersistence } from './persistence.mjs';
 import { createResourceStore } from './resource-store.mjs';
+import { inspectEnvironment } from './scripts/env-requirements.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8787);
@@ -46,7 +47,13 @@ const MAX_VIDEO_BYTES = 1_000_000_000;
 const VIDEO_TOKEN_TTL_MS = 1000 * 60 * 10;
 const VIDEO_TOKEN_SECRET = process.env.LYKIOS_VIDEO_SECRET || (IS_PROD ? '' : crypto.randomBytes(32).toString('hex'));
 
-if (ON_VERCEL && !DATABASE_URL) throw new Error('Vercel requiere DATABASE_URL persistente');
+if (ON_VERCEL) {
+  const envCheck=inspectEnvironment(VERCEL_ENV||'preview');
+  if(envCheck.status!=='GO'){
+    const problems=[...envCheck.missing.map(x=>`falta ${x}`),...envCheck.invalid];
+    throw new Error(`Configuración Vercel incompleta: ${problems.join('; ')}`);
+  }
+}
 
 if (IS_PROD) {
   const required = ['LYKIOS_VIDEO_SECRET','LYKIOS_APP_ORIGIN','LYKIOS_ADMIN_EMAIL','LYKIOS_ADMIN_PASSWORD','DATABASE_URL'];
