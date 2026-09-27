@@ -282,12 +282,13 @@ document.addEventListener('click',event=>{
     if(runSafeInlineActions(code,event,el)){
       event.preventDefault();
       event.stopPropagation();
+      event.stopImmediatePropagation?.();
     }
   }catch(error){
     console.error('safe_click_bridge_failed',error);
     toast('No se pudo ejecutar esta acción','error');
   }
-});
+},true);
 
 window.addEventListener('beforeunload',()=>{const a=activeLessonVideo;if(!a?.element?.duration)return;try{navigator.sendBeacon?.('/api/video/progress',new Blob([JSON.stringify({lessonId:a.lessonId,videoId:a.videoId,currentTime:a.element.currentTime,duration:a.element.duration})],{type:'application/json'}))}catch{}})
 function render(route){if(route==='store')return openStore();if(route==='login'||!state.me)return renderLogin();({dashboard:renderDashboard,courses:renderCourses,course:renderCourse,lesson:renderLesson,assessment:renderAssessment,profile:renderProfile,teacher:renderTeacher,admin:renderAdmin}[route]||renderDashboard)()}
