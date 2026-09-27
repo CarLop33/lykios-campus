@@ -156,6 +156,7 @@ function verifyPassword(password, salt, expected) {
   }catch{return false}
 }
 function resetTokenHash(token){return crypto.createHash('sha256').update(String(token||'')).digest('hex')}
+function sessionTokenHash(token){return crypto.createHash('sha256').update(String(token||'')).digest('hex')}
 function accountLoginBlocked(user){return Boolean(user?.loginLockedUntil&&new Date(user.loginLockedUntil)>new Date())}
 function recordFailedLogin(user){
   if(!user)return;
@@ -258,6 +259,13 @@ async function readDb(){
     db.courses.forEach(c=>{if(c.sequentialAccess===undefined)c.sequentialAccess=c.slug==='peeling-quimico';});
     db.meta.schemaVersion=17; changed=true;
   }
+  if ((db.meta?.schemaVersion||1) < 18) {
+    db.sessions=(db.sessions||[]).map(s=>{
+      if(!s.tokenHash&&s.token)s.tokenHash=sessionTokenHash(s.token);
+      const next={...s}; delete next.token; return next;
+    });
+    db.meta.schemaVersion=18; changed=true;
+  }
   if (db.meta?.tutorPolicy) { const days=Math.max(0,Number(db.meta.tutorPolicy.retainQueriesDays)||0); if(days>0 && Array.isArray(db.tutorQueries)){ const cutoff=Date.now()-days*86400000; const before=db.tutorQueries.length; db.tutorQueries=db.tutorQueries.filter(q=>new Date(q.createdAt).getTime()>=cutoff); if(db.tutorQueries.length!==before) changed=true; } }
   if(changed) await writeDb(db);
   return db;
@@ -287,7 +295,7 @@ async function seedDb(){
   }
   const adminId = newId();
   const db = {
-    meta:{ schemaVersion:17, createdAt:now(), app:'Lykios LMS', tutorPolicy:{retainQueriesDays:30,storeQuestionText:true,feedbackEnabled:true} },
+    meta:{ schemaVersion:18, createdAt:now(), app:'Lykios LMS', tutorPolicy:{retainQueriesDays:30,storeQuestionText:true,feedbackEnabled:true} },
     users:[
       { id:adminId, email:String(ADMIN_EMAIL).toLowerCase(), firstName:'Lykios', lastName:'Admin', role:'admin', status:'active', lastLoginAt:null, failedLoginCount:0, failedLoginWindowStartedAt:null, loginLockedUntil:null, passwordResetLastSentAt:null, passwordSalt:adminPass.salt, passwordHash:adminPass.hash, createdAt:now() }
     ],
@@ -335,7 +343,8 @@ async function readBody(req){
 async function auth(req, db){
   const sid = parseCookies(req).lykios_session;
   if(!sid) return null;
-  const session = db.sessions.find(s=>s.token===sid && new Date(s.expiresAt)>new Date());
+  const sidHash=sessionTokenHash(sid);
+  const session = db.sessions.find(s=>(s.tokenHash===sidHash||s.token===sid) && new Date(s.expiresAt)>new Date());
   if(!session) return null;
   const user=db.users.find(u=>u.id===session.userId) || null;
   if(user && (user.status||'active')!=='active' && user.role!=='admin') return null;
@@ -1228,7 +1237,7 @@ function checkoutMock(db,body){
   const isFirstWelcome=!(db.emailOutbox||[]).some(e=>e.userId===user.id&&e.type==='welcome');
   if(isFirstWelcome) queueEmail(db,{to:user.email,type:'welcome',userId:user.id});
   queueEmail(db,{to:user.email,type:'purchase',userId:user.id,courseId:missingCourses[0]?.id||null,meta:{orderNumber:order.number,courseTitle:target.title}}); markLocalEmailsSent(db);
-  const token=crypto.randomBytes(32).toString('base64url'); db.sessions.push({id:newId(),token,userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+SESSION_TTL_MS).toISOString()});
+  const token=crypto.randomBytes(32).toString('base64url'); db.sessions.push({id:newId(),tokenHash:sessionTokenHash(token),userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+SESSION_TTL_MS).toISOString()});
   return {user,target,order,payment,enrollments,token};
 }
 
@@ -1256,7 +1265,7 @@ function prepareCheckout(db,body){
   const order={id:newId(),number:`ORD-${new Date().getFullYear()}-${String(db.orders.length+1).padStart(5,'0')}`,userId:user.id,courseId:itemType==='course'?target.id:null,bundleId:itemType==='bundle'?target.id:null,itemType,itemTitle:target.title,lineCourseIds:validCourses.map(c=>c.id),subtotalCents:pr.baseCents,promotionDiscountCents:pr.discountCents,couponDiscountCents:couponDiscount,discountCents:pr.discountCents+couponDiscount,couponCode:couponResult.coupon?.code||null,totalCents:total,currency:(target.currency||'EUR').toUpperCase(),status:total===0?'pending_free':'pending_payment',provider:total===0?'free':PAYMENT_PROVIDER,createdAt:now(),paidAt:null};
   const payment={id:newId(),orderId:order.id,userId:user.id,amountCents:order.totalCents,currency:order.currency,status:total===0?'pending':'pending',provider:total===0?'free':PAYMENT_PROVIDER,providerRef:null,createdAt:now()};
   db.orders.push(order); db.payments.push(payment);
-  const token=crypto.randomBytes(32).toString('base64url'); db.sessions.push({id:newId(),token,userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+SESSION_TTL_MS).toISOString()});
+  const token=crypto.randomBytes(32).toString('base64url'); db.sessions.push({id:newId(),tokenHash:sessionTokenHash(token),userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+SESSION_TTL_MS).toISOString()});
   return {user,target,order,payment,missingCourses,coupon:couponResult.coupon,token};
 }
 function fulfillOrder(db,order,{providerRef=null,eventId=null}={}){
@@ -1423,7 +1432,7 @@ export const handleRequest=async (req,res)=>{
         clearFailedLogin(user);db.sessions=db.sessions.filter(s=>new Date(s.expiresAt)>new Date());
         const token=crypto.randomBytes(32).toString('base64url');
         user.lastLoginAt=now();
-        db.sessions.push({id:newId(),token,userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+SESSION_TTL_MS).toISOString()});
+        db.sessions.push({id:newId(),tokenHash:sessionTokenHash(token),userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+SESSION_TTL_MS).toISOString()});
         try{
           await writeDb(db);
           return json(res,200,{user:{id:user.id,email:user.email,firstName:user.firstName,lastName:user.lastName,role:user.role,status:user.status||'active'}},{'set-cookie':sessionCookie(token)});
@@ -1439,7 +1448,8 @@ export const handleRequest=async (req,res)=>{
       if(!sid)return json(res,200,{ok:true},{'set-cookie':sessionCookie('',0)});
       for(let attempt=0;attempt<3;attempt++){
         const db=await readDb();
-        db.sessions=db.sessions.filter(s=>s.token!==sid);
+        const sidHash=sessionTokenHash(sid);
+        db.sessions=db.sessions.filter(s=>s.tokenHash!==sidHash&&s.token!==sid);
         try{
           await writeDb(db);
           return json(res,200,{ok:true},{'set-cookie':sessionCookie('',0)});
@@ -1504,7 +1514,7 @@ export const handleRequest=async (req,res)=>{
         if(verifyPassword(newPassword,user.passwordSalt,user.passwordHash))return json(res,400,{error:'La nueva contraseña debe ser diferente de la actual'});
         const hp=hashPassword(newPassword);user.passwordSalt=hp.salt;user.passwordHash=hp.hash;clearFailedLogin(user);
         db.sessions=db.sessions.filter(s=>s.userId!==user.id);
-        const token=crypto.randomBytes(32).toString('base64url');db.sessions.push({id:newId(),token,userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+SESSION_TTL_MS).toISOString()});
+        const token=crypto.randomBytes(32).toString('base64url');db.sessions.push({id:newId(),tokenHash:sessionTokenHash(token),userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+SESSION_TTL_MS).toISOString()});
         db.activity.push({id:newId(),userId:user.id,type:'password_changed',label:'Contraseña actualizada',at:now()});
         await writeDb(db);return json(res,200,{ok:true},{'set-cookie':sessionCookie(token)});
       }
