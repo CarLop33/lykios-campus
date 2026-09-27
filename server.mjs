@@ -1286,6 +1286,20 @@ function prepareCheckout(db,body){
   const activeOwned=new Set(db.enrollments.filter(e=>e.userId===user.id&&e.status==='active').map(e=>e.courseId));
   const missingCourses=validCourses.filter(c=>!activeOwned.has(c.id));
   if(!missingCourses.length)return {error:'Este usuario ya tiene acceso a todo el contenido incluido',status:409};
+
+  // Un doble clic o reintento de red no debe crear dos pedidos Stripe.
+  const pendingOrder=db.orders
+    .filter(o=>o.userId===user.id&&o.itemType===itemType&&o.status==='pending_payment')
+    .filter(o=>itemType==='course'?o.courseId===target.id:o.bundleId===target.id)
+    .filter(o=>Date.now()-new Date(o.createdAt).getTime()<60*60*1000)
+    .sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt))[0]||null;
+  if(pendingOrder){
+    const payment=db.payments.find(p=>p.orderId===pendingOrder.id)||null;
+    const token=crypto.randomBytes(32).toString('base64url');
+    db.sessions.push({id:newId(),tokenHash:sessionTokenHash(token),userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+SESSION_TTL_MS).toISOString()});
+    return {user,target,order:pendingOrder,payment,missingCourses,coupon:null,token,reused:true};
+  }
+
   const pr=pricingFor(db,itemType,target);
   const couponResult=validateCoupon(db,body.couponCode,{user,targetType:itemType,targetId:target.id,subtotalCents:pr.finalCents});
   if(couponResult.error)return couponResult;
@@ -1404,14 +1418,95 @@ export const handleRequest=async (req,res)=>{
     if(url.pathname==='/api/public/catalog' && req.method==='GET'){const db=await readDb();return json(res,200,catalogPayload(db));}
     if(url.pathname==='/api/checkout/create' && req.method==='POST'){
       if(PAYMENT_PROVIDER!=='stripe'&&IS_PROD)return json(res,503,{error:'Pasarela de pago no configurada'});
-      const body=await readBody(req); const db=await readDb(); const result=prepareCheckout(db,body); if(result.error)return json(res,result.status||400,{error:result.error});
-      if(result.order.totalCents===0){const fulfilled=fulfillOrder(db,result.order,{providerRef:'free'});await writeDb(db);return json(res,201,{ok:true,free:true,user:{id:result.user.id,email:result.user.email,firstName:result.user.firstName,role:result.user.role},order:result.order,enrollments:fulfilled.enrollments},{'set-cookie':sessionCookie(result.token)});}
-      if(PAYMENT_PROVIDER!=='stripe')return json(res,503,{error:'Pago real no disponible en este entorno'});
-      try{const session=await stripeCreateCheckoutSession(result.order,result.user);result.order.checkoutSessionId=session.id;result.order.checkoutUrl=session.url;result.order.checkoutExpiresAt=session.expires_at?new Date(session.expires_at*1000).toISOString():null;result.payment.providerRef=session.id;await writeDb(db);return json(res,201,{ok:true,user:{id:result.user.id,email:result.user.email,firstName:result.user.firstName,role:result.user.role},order:{id:result.order.id,number:result.order.number,status:result.order.status,totalCents:result.order.totalCents,currency:result.order.currency},checkoutUrl:session.url},{'set-cookie':sessionCookie(result.token)});}catch(e){markPaymentFailed(db,result.order,e.message);await writeDb(db);logEvent('error','stripe_checkout_failed',{orderId:result.order.id,error:e.message});return json(res,502,{error:'No se pudo iniciar el pago. Inténtalo de nuevo.'});}
+      const body=await readBody(req);
+      for(let attempt=0;attempt<3;attempt++){
+        const workDb=await readDb();
+        const result=prepareCheckout(workDb,body);
+        if(result.error)return json(res,result.status||400,{error:result.error});
+
+        if(result.order.totalCents===0){
+          const fulfilled=fulfillOrder(workDb,result.order,{providerRef:'free'});
+          try{
+            await writeDb(workDb);
+            return json(res,201,{ok:true,free:true,user:{id:result.user.id,email:result.user.email,firstName:result.user.firstName,role:result.user.role},order:result.order,enrollments:fulfilled.enrollments},{'set-cookie':sessionCookie(result.token)});
+          }catch(error){
+            if(error?.code==='STORAGE_CONFLICT'&&attempt<2)continue;
+            throw error;
+          }
+        }
+
+        if(PAYMENT_PROVIDER!=='stripe')return json(res,503,{error:'Pago real no disponible en este entorno'});
+
+        // Si ya existe una sesión Stripe vigente, reutilízala.
+        if(result.reused&&result.order.checkoutUrl&&(!result.order.checkoutExpiresAt||new Date(result.order.checkoutExpiresAt)>new Date())){
+          try{
+            await writeDb(workDb);
+            return json(res,200,{ok:true,reused:true,user:{id:result.user.id,email:result.user.email,firstName:result.user.firstName,role:result.user.role},order:{id:result.order.id,number:result.order.number,status:result.order.status,totalCents:result.order.totalCents,currency:result.order.currency},checkoutUrl:result.order.checkoutUrl},{'set-cookie':sessionCookie(result.token)});
+          }catch(error){
+            if(error?.code==='STORAGE_CONFLICT'&&attempt<2)continue;
+            throw error;
+          }
+        }
+
+        // Persistir SIEMPRE el pedido antes de hablar con Stripe.
+        try{
+          await writeDb(workDb);
+        }catch(error){
+          if(error?.code==='STORAGE_CONFLICT'&&attempt<2)continue;
+          throw error;
+        }
+
+        try{
+          const session=await stripeCreateCheckoutSession(result.order,result.user);
+          for(let saveAttempt=0;saveAttempt<3;saveAttempt++){
+            const updateDb=await readDb();
+            const order=updateDb.orders.find(o=>o.id===result.order.id);
+            const payment=updateDb.payments.find(p=>p.orderId===result.order.id);
+            if(!order)return json(res,409,{error:'El pedido ya no está disponible'});
+            order.checkoutSessionId=session.id;
+            order.checkoutUrl=session.url;
+            order.checkoutExpiresAt=session.expires_at?new Date(session.expires_at*1000).toISOString():null;
+            if(payment)payment.providerRef=session.id;
+            try{
+              await writeDb(updateDb);
+              return json(res,201,{ok:true,reused:Boolean(result.reused),user:{id:result.user.id,email:result.user.email,firstName:result.user.firstName,role:result.user.role},order:{id:order.id,number:order.number,status:order.status,totalCents:order.totalCents,currency:order.currency},checkoutUrl:session.url},{'set-cookie':sessionCookie(result.token)});
+            }catch(error){
+              if(error?.code==='STORAGE_CONFLICT'&&saveAttempt<2)continue;
+              throw error;
+            }
+          }
+        }catch(error){
+          for(let saveAttempt=0;saveAttempt<3;saveAttempt++){
+            const failDb=await readDb();
+            const order=failDb.orders.find(o=>o.id===result.order.id);
+            if(order)markPaymentFailed(failDb,order,error.message);
+            try{await writeDb(failDb);break}catch(saveError){if(saveError?.code==='STORAGE_CONFLICT'&&saveAttempt<2)continue;throw saveError}
+          }
+          logEvent('error','stripe_checkout_failed',{orderId:result.order.id,error:error.message});
+          return json(res,502,{error:'No se pudo iniciar el pago. Inténtalo de nuevo.'});
+        }
+      }
+      return json(res,503,{error:'El Campus está procesando otro pedido. Inténtalo de nuevo.'});
     }
     if(url.pathname==='/api/checkout/status' && req.method==='GET'){const db=await readDb();const user=await auth(req,db);if(!user)return json(res,401,{error:'No autenticado'});const order=db.orders.find(o=>o.id===url.searchParams.get('order')&&o.userId===user.id);if(!order)return json(res,404,{error:'Pedido no encontrado'});return json(res,200,{order:{id:order.id,number:order.number,status:order.status,totalCents:order.totalCents,currency:order.currency,paidAt:order.paidAt||null}});}
     if(url.pathname==='/api/webhooks/stripe' && req.method==='POST'){
-      if(PAYMENT_PROVIDER!=='stripe')return json(res,404,{error:'No disponible'});const raw=await readRawBody(req);if(!verifyStripeWebhook(raw,req.headers['stripe-signature']))return json(res,400,{error:'Firma inválida'});let event;try{event=JSON.parse(raw)}catch{return json(res,400,{error:'Payload inválido'})}const db=await readDb();const result=await handleStripeEvent(db,event);await writeDb(db);logEvent('info','stripe_webhook',{eventId:event.id,type:event.type,result});return json(res,200,{received:true});
+      if(PAYMENT_PROVIDER!=='stripe')return json(res,404,{error:'No disponible'});
+      const raw=await readRawBody(req);
+      if(!verifyStripeWebhook(raw,req.headers['stripe-signature']))return json(res,400,{error:'Firma inválida'});
+      let event;try{event=JSON.parse(raw)}catch{return json(res,400,{error:'Payload inválido'})}
+      for(let attempt=0;attempt<3;attempt++){
+        const workDb=await readDb();
+        const result=await handleStripeEvent(workDb,event);
+        try{
+          await writeDb(workDb);
+          logEvent('info','stripe_webhook',{eventId:event.id,type:event.type,result});
+          return json(res,200,{received:true});
+        }catch(error){
+          if(error?.code==='STORAGE_CONFLICT'&&attempt<2)continue;
+          throw error;
+        }
+      }
+      return json(res,503,{error:'No se pudo confirmar el evento de pago'});
     }
     if(url.pathname==='/api/checkout/mock' && req.method==='POST'){
       if(IS_PROD)return json(res,404,{error:'No disponible'});
