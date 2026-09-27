@@ -1758,6 +1758,18 @@ export const handleRequest=async (req,res)=>{
           await writeDb(db);
           return json(res,201,{email:mail});
         }
+        if(url.pathname==='/api/admin/email/certificate-test' && req.method==='POST'){
+          const body=await readBody(req);
+          const student=db.users.find(u=>u.id===body.userId&&u.role==='student');
+          const course=db.courses.find(c=>c.id===body.courseId);
+          if(!student||!course)return json(res,404,{error:'Alumno o curso no encontrado'});
+          const cert=db.certificates.find(c=>c.userId===student.id&&c.courseId===course.id&&(c.status||'valid')!=='revoked');
+          if(!cert)return json(res,409,{error:'El alumno no tiene un certificado válido para ese curso'});
+          const mail=queueEmail(db,{to:student.email,type:'certificate',userId:student.id,courseId:course.id,meta:{certificateCode:cert.code}});
+          markLocalEmailsSent(db);
+          await writeDb(db);
+          return json(res,201,{email:mail});
+        }
         if(url.pathname==='/api/admin/email/reminder' && req.method==='POST'){const body=await readBody(req);const student=db.users.find(u=>u.id===body.userId&&u.role==='student');const course=db.courses.find(c=>c.id===body.courseId);if(!student||!course)return json(res,404,{error:'Alumno o curso no encontrado'});const mail=queueEmail(db,{to:student.email,type:'reminder',userId:student.id,courseId:course.id});markLocalEmailsSent(db);await writeDb(db);return json(res,201,{email:mail});}
 
         if(url.pathname==='/api/admin/students' && req.method==='GET') return json(res,200,{students:studentsAdminPayload(db),courses:db.courses.map(c=>({id:c.id,title:c.title,slug:c.slug,status:c.status}))});
