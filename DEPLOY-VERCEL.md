@@ -103,6 +103,15 @@ Después de restaurar, ejecutar siempre el smoke test y comprobar login, dashboa
 8. Solo entonces asociar `campus.lykiosacademy.com`.
 9. Ejecutar smoke test de nuevo sobre el dominio final.
 
+## Stripe en Preview
+Para validar el flujo de pago sin dinero real, Preview puede usar Stripe Test Mode con estas variables, siempre limitadas al entorno Preview:
+
+- `STRIPE_SECRET_KEY`: clave restringida de prueba con permiso de escritura para Checkout Sessions.
+- `STRIPE_WEBHOOK_SECRET`: secreto de firma del destino de eventos de prueba.
+- `LYKIOS_PAYMENT_PROVIDER=stripe`.
+
+El destino de eventos de prueba debe apuntar al alias estable de la rama `preview` y escuchar solo los eventos de Checkout que procesa el backend. No copiar estas variables a Production durante las pruebas.
+
 ## Seguridad
 - No subir `.env`, backups ni credenciales al repositorio.
 - Preview y Production deben usar credenciales distintas cuando sea posible.
