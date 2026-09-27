@@ -1346,6 +1346,40 @@ async function performAssessmentSubmit(userId,body){
   return {status:503,body:{error:'El Campus está registrando otra evaluación. Inténtalo de nuevo.'}};
 }
 
+async function cleanupSyntheticTestUser(email){
+  for(let attempt=0;attempt<3;attempt++){
+    const db=await readDb();
+    const user=db.users.find(u=>u.email.toLowerCase()===String(email).toLowerCase());
+    if(!user)return true;
+    const enrollmentIds=db.enrollments.filter(e=>e.userId===user.id).map(e=>e.id);
+    const orderIds=db.orders.filter(o=>o.userId===user.id).map(o=>o.id);
+    db.progress=db.progress.filter(p=>!enrollmentIds.includes(p.enrollmentId));
+    db.videoProgress=(db.videoProgress||[]).filter(v=>v.userId!==user.id);
+    db.attempts=db.attempts.filter(a=>a.userId!==user.id);
+    db.certificates=db.certificates.filter(x=>x.userId!==user.id);
+    db.activity=db.activity.filter(a=>a.userId!==user.id);
+    db.enrollments=db.enrollments.filter(e=>e.userId!==user.id);
+    db.payments=db.payments.filter(p=>p.userId!==user.id&&!orderIds.includes(p.orderId));
+    db.orders=db.orders.filter(o=>o.userId!==user.id);
+    db.couponRedemptions=(db.couponRedemptions||[]).filter(r=>r.userId!==user.id&&!orderIds.includes(r.orderId));
+    db.emailOutbox=(db.emailOutbox||[]).filter(e=>e.userId!==user.id);
+    db.passwordResetTokens=(db.passwordResetTokens||[]).filter(t=>t.userId!==user.id);
+    db.sessions=db.sessions.filter(s=>s.userId!==user.id);
+    db.studentNotes=(db.studentNotes||[]).filter(n=>n.userId!==user.id);
+    db.tutorQueries=(db.tutorQueries||[]).filter(q=>q.userId!==user.id);
+    db.tutorFeedback=(db.tutorFeedback||[]).filter(x=>x.userId!==user.id);
+    db.users=db.users.filter(u=>u.id!==user.id);
+    try{
+      await writeDb(db);
+      return true;
+    }catch(error){
+      if(error?.code==='STORAGE_CONFLICT'&&attempt<2)continue;
+      throw error;
+    }
+  }
+  return false;
+}
+
 function prepareCheckout(db,body){
   const itemType=body.itemType==='bundle'?'bundle':'course';
   const target=itemType==='bundle'
