@@ -260,7 +260,7 @@ async function readDb(){
 let dbWriteChain = Promise.resolve();
 async function writeDb(db){
   const expected=Number.isFinite(db.__storageVersion)?db.__storageVersion:null;
-  dbWriteChain=dbWriteChain.then(async()=>{
+  dbWriteChain=dbWriteChain.catch(()=>{}).then(async()=>{
     await flushEmailOutbox(db);
     const next=await persistence.save(db,expected);
     Object.defineProperty(db,'__storageVersion',{value:next,writable:true,enumerable:false,configurable:true});
@@ -1398,20 +1398,33 @@ export const handleRequest=async (req,res)=>{
     }
     if(url.pathname==='/api/login' && req.method==='POST'){
       const rl=rateLimit(`login:${clientIp(req)}`,10,15*60*1000); if(!rl.ok)return json(res,429,{error:'Demasiados intentos. Prueba más tarde.'},{'retry-after':String(Math.ceil((rl.reset-Date.now())/1000))});
-      const body=await readBody(req); const db=await readDb(); const email=cleanText(body.email,220).toLowerCase();
-      const user=db.users.find(u=>u.email.toLowerCase()===email);
-      if(user&&accountLoginBlocked(user))return json(res,429,{error:'Demasiados intentos. Espera unos minutos antes de volver a intentarlo.'});
-      if(!user || !verifyPassword(String(body.password||''),user.passwordSalt,user.passwordHash)){
-        if(user){recordFailedLogin(user);await writeDb(db);}
-        return json(res,401,{error:'Credenciales incorrectas'});
+      const body=await readBody(req); const email=cleanText(body.email,220).toLowerCase(); const password=String(body.password||'');
+      for(let attempt=0;attempt<3;attempt++){
+        const db=await readDb();
+        const user=db.users.find(u=>u.email.toLowerCase()===email);
+        if(user&&accountLoginBlocked(user))return json(res,429,{error:'Demasiados intentos. Espera unos minutos antes de volver a intentarlo.'});
+        if(!user || !verifyPassword(password,user.passwordSalt,user.passwordHash)){
+          if(user){
+            recordFailedLogin(user);
+            try{await writeDb(db);}
+            catch(err){if(err?.code==='STORAGE_CONFLICT'&&attempt<2)continue;throw err;}
+          }
+          return json(res,401,{error:'Credenciales incorrectas'});
+        }
+        if((user.status||'active')!=='active' && user.role!=='admin') return json(res,403,{error:'Cuenta bloqueada. Contacta con Lykios Academy.'});
+        clearFailedLogin(user);db.sessions=db.sessions.filter(s=>new Date(s.expiresAt)>new Date());
+        const token=crypto.randomBytes(32).toString('base64url');
+        user.lastLoginAt=now();
+        db.sessions.push({id:newId(),token,userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+SESSION_TTL_MS).toISOString()});
+        try{
+          await writeDb(db);
+          return json(res,200,{user:{id:user.id,email:user.email,firstName:user.firstName,lastName:user.lastName,role:user.role,status:user.status||'active'}},{'set-cookie':sessionCookie(token)});
+        }catch(err){
+          if(err?.code==='STORAGE_CONFLICT'&&attempt<2)continue;
+          throw err;
+        }
       }
-      if((user.status||'active')!=='active' && user.role!=='admin') return json(res,403,{error:'Cuenta bloqueada. Contacta con Lykios Academy.'});
-      clearFailedLogin(user);db.sessions=db.sessions.filter(s=>new Date(s.expiresAt)>new Date());
-      const token=crypto.randomBytes(32).toString('base64url');
-      user.lastLoginAt=now();
-      db.sessions.push({id:newId(),token,userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+SESSION_TTL_MS).toISOString()});
-      await writeDb(db);
-      return json(res,200,{user:{id:user.id,email:user.email,firstName:user.firstName,lastName:user.lastName,role:user.role,status:user.status||'active'}},{'set-cookie':sessionCookie(token)});
+      return json(res,503,{error:'El Campus está procesando otra operación. Inténtalo de nuevo.'});
     }
     if(url.pathname==='/api/logout' && req.method==='POST'){
       const db=await readDb(); const sid=parseCookies(req).lykios_session; db.sessions=db.sessions.filter(s=>s.token!==sid); await writeDb(db);
