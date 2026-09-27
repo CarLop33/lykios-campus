@@ -1494,10 +1494,11 @@ export const handleRequest=async (req,res)=>{
         const completedLessons=courses.reduce((n,c)=>n+(Number(c.completedCount)||0),0);
         const totalLessons=courses.reduce((n,c)=>n+(Number(c.totalLessons)||0),0);
         const overallProgressPercent=totalLessons?Math.round(completedLessons/totalLessons*100):0;
-        const resumable=courses.filter(c=>c.resumeLesson).sort((a,b)=>new Date(b.resumeLesson?.lastActivityAt||b.enrollment?.enrolledAt||0)-new Date(a.resumeLesson?.lastActivityAt||a.enrollment?.enrolledAt||0));
-        const continueCourse=resumable[0]||courses.find(c=>(Number(c.progressPercent)||0)<100)||courses[0]||null;
+        const incompleteCourses=courses.filter(c=>(Number(c.progressPercent)||0)<100);
+        const resumable=incompleteCourses.filter(c=>c.resumeLesson).sort((a,b)=>new Date(b.resumeLesson?.lastActivityAt||b.enrollment?.enrolledAt||0)-new Date(a.resumeLesson?.lastActivityAt||a.enrollment?.enrolledAt||0));
+        const continueCourse=resumable[0]||incompleteCourses[0]||null;
         const certificates=db.certificates.filter(c=>c.userId===user.id&&(c.status||'valid')!=='revoked').map(c=>publicCertificate(db,c)).filter(Boolean).sort((a,b)=>new Date(b.issuedAt)-new Date(a.issuedAt));
-        return json(res,200,{stats:{activeCourses:courses.length,completedLessons,totalLessons,overallProgressPercent,certificates:certificates.length},continueCourse:continueCourse?{slug:continueCourse.slug,title:continueCourse.title,subtitle:continueCourse.subtitle,progressPercent:continueCourse.progressPercent,resumeLesson:continueCourse.resumeLesson,nextLesson:continueCourse.nextLesson}:null,courses,certificates,activity:db.activity.filter(a=>a.userId===user.id).slice(-8).reverse()});
+        return json(res,200,{stats:{activeCourses:incompleteCourses.length,completedLessons,totalLessons,overallProgressPercent,certificates:certificates.length},continueCourse:continueCourse?{slug:continueCourse.slug,title:continueCourse.title,subtitle:continueCourse.subtitle,progressPercent:continueCourse.progressPercent,resumeLesson:continueCourse.resumeLesson,nextLesson:continueCourse.nextLesson}:null,courses,certificates,activity:db.activity.filter(a=>a.userId===user.id).slice(-8).reverse()});
       }
       if(url.pathname==='/api/course' && req.method==='GET'){
         const course=coursePayload(db,user,url.searchParams.get('slug')||'peeling-quimico'); if(!course) return json(res,404,{error:'Curso no encontrado'}); return json(res,200,course);
