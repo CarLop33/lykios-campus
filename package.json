@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.mjs",
     "check": "node --check server.mjs",
-    "smoke": "sh scripts/smoke-test.sh",
+    "smoke": "node scripts/smoke-test.mjs",
     "backup": "node scripts/backup-state.mjs",
     "db:import": "node scripts/migrate-json-to-postgres.mjs",
     "db:verify": "node scripts/verify-postgres.mjs",
