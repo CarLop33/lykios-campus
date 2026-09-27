@@ -1326,7 +1326,7 @@ function studentProgressForCourse(db,userId,courseId){
 function studentAdminPayload(db,user){
   const enrollments=db.enrollments.filter(e=>e.userId===user.id).map(e=>{const c=db.courses.find(x=>x.id===e.courseId);const p=studentProgressForCourse(db,user.id,e.courseId);return {...e,courseTitle:c?.title||'Curso',courseSlug:c?.slug||'',progressPercent:p.progressPercent,lessonsCompleted:p.lessonsCompleted,lessonsTotal:p.lessonsTotal};});
   const attempts=db.attempts.filter(a=>a.userId===user.id).sort((a,b)=>new Date(b.submittedAt)-new Date(a.submittedAt)).map(a=>{const ass=db.assessments.find(x=>x.id===a.assessmentId);return {...a,assessmentTitle:ass?.title||'Evaluación'};});
-  const certificates=db.certificates.filter(c=>c.userId===user.id).map(c=>({...publicCertificate(db,c),id:c.id}));
+  const certificates=db.certificates.filter(c=>c.userId===user.id).map(c=>({...publicCertificate(db,c),id:c.id,courseId:c.courseId}));
   const orders=db.orders.filter(o=>o.userId===user.id).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).map(o=>{const c=db.courses.find(x=>x.id===o.courseId);return {...o,courseTitle:c?.title||'',totalLabel:money(o.totalCents,o.currency)};});
   const notes=(db.studentNotes||[]).filter(n=>n.userId===user.id).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
   return {id:user.id,email:user.email,firstName:user.firstName,lastName:user.lastName,role:user.role,status:user.status||'active',createdAt:user.createdAt,lastLoginAt:user.lastLoginAt||null,enrollments,attempts,certificates,orders,notes};
