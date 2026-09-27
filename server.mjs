@@ -1441,8 +1441,8 @@ async function stripeCreateCheckoutSession(order,user){
   params.set('mode','payment');
   params.set('client_reference_id',order.id);
   params.set('customer_email',user.email);
-  params.set('success_url',`${APP_ORIGIN}/?payment=success&order=${encodeURIComponent(order.id)}`);
-  params.set('cancel_url',`${APP_ORIGIN}/?payment=cancel&order=${encodeURIComponent(order.id)}`);
+  params.set('success_url',`${PUBLIC_APP_ORIGIN}/?payment=success&order=${encodeURIComponent(order.id)}`);
+  params.set('cancel_url',`${PUBLIC_APP_ORIGIN}/?payment=cancel&order=${encodeURIComponent(order.id)}`);
   params.set('line_items[0][price_data][currency]',String(order.currency||'EUR').toLowerCase());
   params.set('line_items[0][price_data][product_data][name]',order.itemTitle);
   params.set('line_items[0][price_data][unit_amount]',String(order.totalCents));
