@@ -961,6 +961,9 @@ function mailTemplate(type,ctx={}){
   const code=emailEscape(cleanText(ctx.certificateCode||'',100));
   const resetUrl=cleanText(ctx.resetUrl||'',1000);
   const campusUrl=cleanText(ctx.campusUrl||APP_ORIGIN,1000).replace(/\/$/,'');
+  const courseSlug=cleanText(ctx.courseSlug||'',160);
+  const courseUrl=courseSlug?`${campusUrl}/course?slug=${encodeURIComponent(courseSlug)}`:campusUrl;
+  const certificateUrl=courseSlug?`${courseUrl}#certificate`:campusUrl;
   const templates={
     welcome:{
       subject:'Bienvenido a Lykios Academy',
@@ -979,7 +982,7 @@ function mailTemplate(type,ctx={}){
         title:'Matrícula confirmada',
         body:`<p style="margin:0 0 16px 0;">Hola <strong>${firstName}</strong>,</p><p style="margin:0 0 16px 0;">Tu acceso a <strong>${course}</strong> ya está activo.</p>${order?`<p style="margin:0 0 16px 0;">Número de pedido: <strong>${order}</strong></p>`:''}<p style="margin:0;">Puedes empezar cuando quieras y tu progreso se guardará automáticamente.</p>`,
         ctaLabel:'Comenzar mi formación',
-        ctaUrl:campusUrl
+        ctaUrl:courseUrl
       })
     },
     password_reset:{
@@ -1000,7 +1003,7 @@ function mailTemplate(type,ctx={}){
         title:'Curso completado',
         body:`<p style="margin:0 0 16px 0;">Enhorabuena, <strong>${firstName}</strong>.</p><p style="margin:0 0 16px 0;">Has completado satisfactoriamente <strong>${course}</strong>.</p><p style="margin:0;">Si el curso incluye certificado, lo encontrarás en tu Campus una vez emitido.</p>`,
         ctaLabel:'Ver mi progreso',
-        ctaUrl:campusUrl
+        ctaUrl:courseUrl
       })
     },
     certificate:{
@@ -1010,7 +1013,7 @@ function mailTemplate(type,ctx={}){
         title:'Certificado emitido',
         body:`<p style="margin:0 0 16px 0;">Hola <strong>${firstName}</strong>,</p><p style="margin:0 0 16px 0;">Tu certificado de <strong>${course}</strong> ya está disponible.</p>${code?`<p style="margin:0 0 16px 0;">Código de verificación: <strong>${code}</strong></p>`:''}<p style="margin:0;">Puedes descargarlo desde tu Campus y comprobar su autenticidad cuando lo necesites.</p>`,
         ctaLabel:'Ver mi certificado',
-        ctaUrl:campusUrl
+        ctaUrl:certificateUrl
       })
     },
     reminder:{
@@ -1020,7 +1023,7 @@ function mailTemplate(type,ctx={}){
         title:'Tu curso te espera',
         body:`<p style="margin:0 0 16px 0;">Hola <strong>${firstName}</strong>,</p><p style="margin:0 0 16px 0;">Tienes pendiente continuar <strong>${course}</strong>.</p><p style="margin:0;">Cuando vuelvas al Campus podrás retomar tu formación desde el punto en el que la dejaste.</p>`,
         ctaLabel:'Continuar mi curso',
-        ctaUrl:campusUrl,
+        ctaUrl:courseUrl,
         footerNote:'Mensaje de seguimiento formativo relacionado con un curso en el que estás matriculado.'
       })
     }
@@ -1034,7 +1037,7 @@ function queueEmail(db,{to,type,userId=null,courseId=null,meta={}}){
   if(!to) return null;
   const user=userId?db.users.find(u=>u.id===userId):null;
   const course=courseId?db.courses.find(c=>c.id===courseId):null;
-  const tpl=mailTemplate(type,{firstName:user?.firstName||meta.firstName,courseTitle:course?.title||meta.courseTitle,orderNumber:meta.orderNumber,certificateCode:meta.certificateCode,resetUrl:meta.resetUrl,campusUrl:PUBLIC_APP_ORIGIN});
+  const tpl=mailTemplate(type,{firstName:user?.firstName||meta.firstName,courseTitle:course?.title||meta.courseTitle,courseSlug:course?.slug||meta.courseSlug,orderNumber:meta.orderNumber,certificateCode:meta.certificateCode,resetUrl:meta.resetUrl,campusUrl:PUBLIC_APP_ORIGIN});
   const item={id:newId(),to:cleanText(to,220).toLowerCase(),type,subject:tpl.subject,html:tpl.html,status:'queued',provider:'resend',userId,courseId,meta,createdAt:now(),sentAt:null,attempts:0,lastError:null,providerRequestId:null};
   db.emailOutbox ||= []; db.emailOutbox.push(item); return item;
 }
