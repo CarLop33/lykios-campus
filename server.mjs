@@ -1710,6 +1710,16 @@ export const handleRequest=async (req,res)=>{
           return json(res,200,{ok:true,email});
         }
         if(url.pathname==='/api/admin/analytics' && req.method==='GET') return json(res,200,adminAnalyticsPayload(db));
+        if(url.pathname==='/api/admin/email/welcome' && req.method==='POST'){
+          const body=await readBody(req);
+          const student=db.users.find(u=>u.id===body.userId&&u.role==='student');
+          if(!student)return json(res,404,{error:'Alumno no encontrado'});
+          if((student.status||'active')!=='active')return json(res,409,{error:'La cuenta del alumno no está activa'});
+          const mail=queueEmail(db,{to:student.email,type:'welcome',userId:student.id});
+          markLocalEmailsSent(db);
+          await writeDb(db);
+          return json(res,201,{email:mail});
+        }
         if(url.pathname==='/api/admin/email/reminder' && req.method==='POST'){const body=await readBody(req);const student=db.users.find(u=>u.id===body.userId&&u.role==='student');const course=db.courses.find(c=>c.id===body.courseId);if(!student||!course)return json(res,404,{error:'Alumno o curso no encontrado'});const mail=queueEmail(db,{to:student.email,type:'reminder',userId:student.id,courseId:course.id});markLocalEmailsSent(db);await writeDb(db);return json(res,201,{email:mail});}
 
         if(url.pathname==='/api/admin/students' && req.method==='GET') return json(res,200,{students:studentsAdminPayload(db),courses:db.courses.map(c=>({id:c.id,title:c.title,slug:c.slug,status:c.status}))});
