@@ -1952,6 +1952,35 @@ export const handleRequest=async (req,res)=>{
         if(url.pathname==='/api/admin/summary' && req.method==='GET'){
           return json(res,200,{students:db.users.filter(u=>u.role==='student').length,courses:db.courses.length,lessons:db.lessons.length,enrollments:db.enrollments.length,publishedCourses:db.courses.filter(c=>c.status==='published').length,draftCourses:db.courses.filter(c=>c.status==='draft').length,assessments:db.assessments.length,publishedAssessments:db.assessments.filter(a=>a.status==='published').length,attempts:db.attempts.length,certificates:db.certificates.length,validCertificates:db.certificates.filter(c=>c.status!=='revoked').length});
         }
+        if(url.pathname==='/api/admin/backup/state' && req.method==='POST'){
+          if(FILE_BACKEND!=='blob')return json(res,409,{error:'El backup remoto requiere Vercel Blob'});
+          const snapshot=await readDb();
+          const exportedAt=now();
+          const storageVersion=Number(snapshot.__storageVersion)||null;
+          const payload={
+            format:'lykios-state-backup-v1',
+            appVersion:APP_VERSION,
+            exportedAt,
+            schemaVersion:snapshot.meta?.schemaVersion||null,
+            storageVersion,
+            data:snapshot
+          };
+          const body=JSON.stringify(payload,null,2)+'\n';
+          const bytes=Buffer.byteLength(body,'utf8');
+          const checksum=crypto.createHash('sha256').update(body).digest('hex');
+          const stamp=exportedAt.replace(/[:.]/g,'-');
+          const versionTag=storageVersion==null?'unknown':String(storageVersion);
+          const pathname=`backups/state/lykios-state-${stamp}-v${versionTag}.json`;
+          const checksumPath=pathname.replace(/\.json$/i,'.sha256');
+          const {put,head}=await import('@vercel/blob');
+          const saved=await put(pathname,Buffer.from(body,'utf8'),{access:'private',contentType:'application/json',addRandomSuffix:false});
+          await put(checksumPath,Buffer.from(`${checksum}  ${pathname.split('/').pop()}\n`,'utf8'),{access:'private',contentType:'text/plain; charset=utf-8',addRandomSuffix:false});
+          const meta=await head(saved.pathname||pathname);
+          const verified=Boolean(meta&&Number(meta.size)===bytes);
+          if(!verified)throw new Error('No se pudo verificar el tamaño del backup remoto');
+          logEvent('info','state_backup_created',{pathname:saved.pathname||pathname,bytes,checksum,storageVersion,schemaVersion:payload.schemaVersion,verified});
+          return json(res,201,{ok:true,pathname:saved.pathname||pathname,checksumPath,sha256:checksum,bytes,storageVersion,schemaVersion:payload.schemaVersion,exportedAt,verified});
+        }
         if(url.pathname==='/api/admin/test/concurrency' && req.method==='POST'){
           if(!IS_PREVIEW)return json(res,404,{error:'Disponible solo en Preview'});
           const runId=crypto.randomBytes(6).toString('hex');
