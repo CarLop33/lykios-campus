@@ -68,6 +68,24 @@ El comando:
 
 Este backup cubre el estado PostgreSQL. Los binarios almacenados en Vercel Blob requieren una estrategia de respaldo separada si se decide conservar una segunda copia fuera del proveedor.
 
+## Restauración controlada
+La restauración no se expone en el panel web. Es una operación deliberadamente manual y exige dos confirmaciones explícitas:
+
+```bash
+LYKIOS_ALLOW_RESTORE=YES DATABASE_URL='...' npm run restore -- backups/lykios-state-....json --confirm
+```
+
+El comando:
+- valida el formato del backup;
+- compara el checksum SHA-256 si existe el archivo `.sha256`;
+- abre una transacción PostgreSQL;
+- bloquea la fila de estado actual;
+- restaura el contenido de forma atómica;
+- incrementa la versión de almacenamiento en vez de retrocederla;
+- hace rollback automático ante cualquier fallo.
+
+Después de restaurar, ejecutar siempre el smoke test y comprobar login, dashboard, progreso y certificados antes de reabrir acceso.
+
 ## Observabilidad
 - Las peticiones generan logs estructurados con request ID, ruta, estado, duración e IP.
 - Los fallos generan el evento `request_failed`.
