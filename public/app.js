@@ -104,7 +104,7 @@ async function renderAdmin(){
   <div class="admin-metrics">${[['Alumnos',s.students],['Cursos',s.courses],['Clases',s.lessons],['Certificados',s.validCertificates||0]].map(x=>`<div class="card stat"><div class="value">${x[1]}</div><div class="label">${x[0]}</div></div>`).join('')}</div>
   <div class="admin-toolbar"><div><h2>Contenido académico</h2><p class="muted">Curso → módulo → clase → recursos → evaluaciones</p></div><div class="legend">${statusPill('published')} ${statusPill('draft')}</div></div>
   <div class="admin-toolbar"><div><h2>Monetización</h2><p class="muted">Packs, cupones, becas y promociones automáticas.</p></div></div>${renderMonetization()}<div class="admin-toolbar"><div><h2>Analítica académica</h2><p class="muted">Finalización, progreso, vídeo, evaluaciones y puntos de abandono.</p></div></div>${renderAdminAnalytics()}<div class="admin-toolbar"><div><h2>Gobernanza del Tutor IA</h2><p class="muted">Privacidad, retención y trazabilidad de respuestas.</p></div></div>${renderAdminTutor()}<div class="admin-catalog">${courses.map(renderAdminCourse).join('')||'<div class="card empty">Todavía no hay cursos.</div>'}</div><div class="admin-toolbar"><div><h2>Docentes</h2><p class="muted">Alta de profesores/autores y asignación de cursos.</p></div><button class="btn-secondary" onclick="openTeacherAdminForm()">＋ Nuevo docente</button></div><div class="card teacher-admin-table">${renderAdminTeachers()}</div><div class="admin-toolbar"><div><h2>Alumnos</h2><p class="muted">Matrículas, progreso, evaluaciones, certificados y gestión de acceso.</p></div></div><div class="card student-admin-table">${renderAdminStudents()}</div><div class="admin-toolbar"><div><h2>Ventas y matrículas</h2><p class="muted">Pedidos confirmados por el motor de pagos.</p></div></div><div class="card certificate-admin-table">${renderAdminOrders()}</div><div class="admin-toolbar"><div><h2>Certificados emitidos</h2><p class="muted">Registro verificable y control de revocación.</p></div><a class="btn-secondary" href="/api/admin/certificate/preview" target="_blank">Vista previa PDF</a></div><div class="card certificate-admin-table">${renderAdminCertificates()}</div><div class="admin-toolbar"><div><h2>Emails transaccionales</h2><p class="muted">Bandeja de salida local y auditoría de comunicaciones.</p></div></div><div class="card certificate-admin-table">${renderAdminEmails()}</div>
-  <div class="admin-toolbar"><div><h2>Pruebas técnicas</h2><p class="muted">Validación no destructiva de concurrencia en checkout y evaluaciones. Solo Preview.</p></div><button class="btn-secondary" id="concurrencyTestBtn" onclick="runConcurrencySelfTest()">Ejecutar prueba concurrente</button></div><div id="concurrencyTestResult" class="card" style="margin-bottom:18px"><span class="muted">Aún no ejecutada.</span></div>
+  <div class="admin-toolbar"><div><h2>Pruebas técnicas</h2><p class="muted">Concurrencia, backup privado y comprobaciones de salud. Solo Preview.</p></div><div><button class="btn-secondary" id="concurrencyTestBtn" onclick="runConcurrencySelfTest()">Prueba concurrente</button> <button class="btn gold" id="previewClosureBtn" onclick="runPreviewClosure()">Ejecutar cierre Preview</button></div></div><div id="concurrencyTestResult" class="card" style="margin-bottom:12px"><span class="muted">Prueba concurrente validada previamente.</span></div><div id="previewClosureResult" class="card" style="margin-bottom:18px"><span class="muted">Cierre Preview aún no ejecutado.</span></div>
   <div id="drawerRoot"></div>`,'admin');const tpf=$('#tutorPolicyForm');if(tpf)tpf.onsubmit=saveTutorPolicy
 }
 
@@ -119,6 +119,49 @@ async function runConcurrencySelfTest(){
     toast('Prueba concurrente superada');
   }catch(e){
     if(box)box.innerHTML='<div><b>❌ Prueba no superada</b><p class="muted">'+esc(e.message)+'</p></div>';
+    toast(e.message,'error');
+  }finally{
+    if(btn)btn.disabled=false;
+  }
+}
+
+async function runPreviewClosure(){
+  const btn=$('#previewClosureBtn'),box=$('#previewClosureResult');
+  if(btn)btn.disabled=true;
+  const show=(msg)=>{if(box)box.innerHTML='<span class="muted">'+esc(msg)+'</span>'};
+  try{
+    show('1/5 · Creando backup privado verificado…');
+    const backup=await api('/api/admin/backup/state',{method:'POST',body:'{}'});
+
+    show('2/5 · Ejecutando prueba concurrente…');
+    const concurrency=await api('/api/admin/test/concurrency',{method:'POST',body:'{}'});
+
+    show('3/5 · Comprobando proceso disponible…');
+    const live=await api('/api/health/live');
+
+    show('4/5 · Comprobando Neon y esquema…');
+    const ready=await api('/api/health/ready');
+
+    show('5/5 · Comprobando catálogo público…');
+    const catalog=await api('/api/public/catalog');
+    const catalogOk=Array.isArray(catalog)||(catalog&&Array.isArray(catalog.courses));
+    const ok=Boolean(
+      backup?.ok&&backup?.verified&&
+      concurrency?.ok&&
+      live?.ok&&
+      ready?.ok&&ready?.storage?.ok&&
+      catalogOk
+    );
+    if(!ok)throw new Error('Una de las comprobaciones no devolvió el estado esperado');
+
+    if(box)box.innerHTML='<div><b>✅ GO Preview</b>'+
+      '<p class="muted">Backup privado: verificado · '+esc(String(backup.bytes||0))+' bytes · SHA-256 '+esc(String(backup.sha256||'').slice(0,16))+'…</p>'+
+      '<p class="muted">Concurrencia: checkout y evaluaciones superados · limpieza correcta.</p>'+
+      '<p class="muted">Health live: OK · Health ready: OK · PostgreSQL: '+esc(String(ready.storage?.backend||''))+' · '+esc(String(ready.storage?.latencyMs||0))+' ms.</p>'+
+      '<p class="muted">Catálogo público: OK.</p></div>';
+    toast('Cierre Preview superado');
+  }catch(e){
+    if(box)box.innerHTML='<div><b>❌ NO-GO Preview</b><p class="muted">'+esc(e.message)+'</p></div>';
     toast(e.message,'error');
   }finally{
     if(btn)btn.disabled=false;
@@ -243,7 +286,7 @@ const SAFE_CLICK_ACTIONS=new Set([
   'openTutorSource','sendTutorFeedback','openBundleForm','openCouponForm','openPromotionForm',
   'deleteMonetization','closeDrawer','openTeacherModuleForm','openTeacherLessonForm','openCourseForm',
   'openTeacherAdminForm','unassignTeacher','assignTeacher','openStudent','toggleStudentStatus',
-  'manualEnroll','removeEnrollment','sendCourseCompletedTest','sendCertificateTest','sendReminderTest','sendStudentReminder','runConcurrencySelfTest','flushEmailQueue','retryAdminEmail','resetStudentProgress','revokeCertificate',
+  'manualEnroll','removeEnrollment','sendCourseCompletedTest','sendCertificateTest','sendReminderTest','sendStudentReminder','runConcurrencySelfTest','runPreviewClosure','flushEmailQueue','retryAdminEmail','resetStudentProgress','revokeCertificate',
   'toggleCourseStatus','deleteCourse','openModuleForm','openAssessmentForm','toggleModuleStatus',
   'deleteModule','openLessonForm','deleteResource','deleteTestVideo','toggleLessonStatus','deleteLesson',
   'openQuestionForm','deleteQuestion','deleteAssessment','reopenAssessment','renderCourse'
@@ -313,5 +356,5 @@ document.addEventListener('click',event=>{
 
 window.addEventListener('beforeunload',()=>{const a=activeLessonVideo;if(!a?.element?.duration)return;try{navigator.sendBeacon?.('/api/video/progress',new Blob([JSON.stringify({lessonId:a.lessonId,videoId:a.videoId,currentTime:a.element.currentTime,duration:a.element.duration})],{type:'application/json'}))}catch{}})
 function render(route){if(route==='store')return openStore();if(route==='login'||!state.me)return renderLogin();({dashboard:renderDashboard,courses:renderCourses,course:renderCourse,lesson:renderLesson,assessment:renderAssessment,profile:renderProfile,teacher:renderTeacher,admin:renderAdmin}[route]||renderDashboard)()}
-Object.assign(window,{render,issueCertificate,revokeCertificate,setRoute,openCourse,logout,openStore,openForgotPassword,forgotPassword,renderResetPassword,resetPassword,openCheckout,validateCoupon,checkoutMock,checkoutReal,confirmPaymentReturn,openStudent,saveStudentProfile,toggleStudentStatus,manualEnroll,removeEnrollment,resetStudentProgress,addStudentNote,sendStudentWelcome,sendPurchaseTest,sendCourseCompletedTest,sendCertificateTest,sendReminderTest,sendStudentReminder,runConcurrencySelfTest,saveStudentProfileById,flushEmailQueue,retryAdminEmail,openLesson,initLessonVideo,completeLesson,openAssessment,renderAssessment,openCourseForm,openModuleForm,openLessonForm,openAssessmentForm,openQuestionForm,reopenAssessment,deleteQuestion,deleteAssessment,closeDrawer,toggleCourseStatus,toggleModuleStatus,toggleLessonStatus,deleteCourse,deleteModule,deleteLesson,uploadResource,deleteResource,uploadTestVideo,deleteTestVideo,openBundleForm,saveBundle,openCouponForm,saveCoupon,openPromotionForm,savePromotion,deleteMonetization,renderTeacher,openTeacherModuleForm,openTeacherLessonForm,teacherUploadResource,openTeacherAdminForm,assignTeacher,unassignTeacher,askTutor,sendTutorFeedback,saveTutorPolicy,openTutorSource,state});
+Object.assign(window,{render,issueCertificate,revokeCertificate,setRoute,openCourse,logout,openStore,openForgotPassword,forgotPassword,renderResetPassword,resetPassword,openCheckout,validateCoupon,checkoutMock,checkoutReal,confirmPaymentReturn,openStudent,saveStudentProfile,toggleStudentStatus,manualEnroll,removeEnrollment,resetStudentProgress,addStudentNote,sendStudentWelcome,sendPurchaseTest,sendCourseCompletedTest,sendCertificateTest,sendReminderTest,sendStudentReminder,runConcurrencySelfTest,runPreviewClosure,saveStudentProfileById,flushEmailQueue,retryAdminEmail,openLesson,initLessonVideo,completeLesson,openAssessment,renderAssessment,openCourseForm,openModuleForm,openLessonForm,openAssessmentForm,openQuestionForm,reopenAssessment,deleteQuestion,deleteAssessment,closeDrawer,toggleCourseStatus,toggleModuleStatus,toggleLessonStatus,deleteCourse,deleteModule,deleteLesson,uploadResource,deleteResource,uploadTestVideo,deleteTestVideo,openBundleForm,saveBundle,openCouponForm,saveCoupon,openPromotionForm,savePromotion,deleteMonetization,renderTeacher,openTeacherModuleForm,openTeacherLessonForm,teacherUploadResource,openTeacherAdminForm,assignTeacher,unassignTeacher,askTutor,sendTutorFeedback,saveTutorPolicy,openTutorSource,state});
 setTimeout(()=>bootstrap(),0);
