@@ -281,9 +281,31 @@ let dbWriteChain = Promise.resolve();
 async function writeDb(db){
   const expected=Number.isFinite(db.__storageVersion)?db.__storageVersion:null;
   dbWriteChain=dbWriteChain.catch(()=>{}).then(async()=>{
-    await flushEmailOutbox(db);
+    // Primero confirma el estado. Ningún efecto externo debe ocurrir si esta
+    // escritura pierde una carrera contra otra instancia serverless.
     const next=await persistence.save(db,expected);
     Object.defineProperty(db,'__storageVersion',{value:next,writable:true,enumerable:false,configurable:true});
+
+    // Después procesa el outbox. Los envíos usan una clave de idempotencia
+    // basada en email.id, por lo que un reintento no duplica el mensaje.
+    try{
+      const mailResult=await flushEmailOutbox(db);
+      const mailChanged=(Number(mailResult?.sent)||0)+(Number(mailResult?.failed)||0)+(Number(mailResult?.deferred)||0)>0;
+      if(mailChanged){
+        try{
+          const finalVersion=await persistence.save(db,next);
+          Object.defineProperty(db,'__storageVersion',{value:finalVersion,writable:true,enumerable:false,configurable:true});
+        }catch(error){
+          if(error?.code==='STORAGE_CONFLICT'){
+            logEvent('warn','email_outbox_status_persist_deferred',{reason:'storage_conflict'});
+          }else{
+            logEvent('error','email_outbox_status_persist_failed',{error:error?.message||String(error)});
+          }
+        }
+      }
+    }catch(error){
+      logEvent('error','email_outbox_flush_failed',{error:error?.message||String(error)});
+    }
   });
   return dbWriteChain;
 }
