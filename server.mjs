@@ -1737,6 +1737,313 @@ function courseSaleReadiness(db,course,{ignorePublication=false}={}){
   if(course.sequentialAccess!==true)reasons.push('El acceso secuencial debe estar activado');
   return {ready:reasons.length===0,reasons,modules:modules.length,lessons:lessons.length,lessonsWithVideo:lessons.length-lessonsWithoutVideo.length,assessments:assessments.length,questions:qCount,resources:generatedResources.length,tutorApproved:lessons.filter(l=>l.tutorApproved===true&&String(l.tutorContent||'').trim()).length};
 }
+
+function canonicalizeTransferValue(value){
+  if(Array.isArray(value)) return value.map(canonicalizeTransferValue);
+  if(value&&typeof value==='object'){
+    const out={};
+    Object.keys(value).sort().forEach(k=>{ if(value[k]!==undefined) out[k]=canonicalizeTransferValue(value[k]); });
+    return out;
+  }
+  return value;
+}
+function transferChecksum(value){
+  return crypto.createHash('sha256').update(JSON.stringify(canonicalizeTransferValue(value))).digest('hex');
+}
+function fingerprintValue(value){
+  const raw=String(value||'');
+  return raw?crypto.createHash('sha256').update(raw).digest('hex').slice(0,20):null;
+}
+function currentTransferStorageFingerprint(){
+  let databaseTarget=null;
+  try{
+    const u=new URL(DATABASE_URL);
+    databaseTarget=u.protocol+'//'+u.hostname+(u.port?':'+u.port:'')+u.pathname;
+  }catch{}
+  const blobCredential=process.env.BLOB_READ_WRITE_TOKEN||process.env.VERCEL_BLOB_READ_WRITE_TOKEN||'';
+  return {
+    database:fingerprintValue(databaseTarget),
+    blobCredential:fingerprintValue(blobCredential),
+    storageBackend:STORAGE_BACKEND,
+    fileBackend:FILE_BACKEND
+  };
+}
+function buildCourseTransferPackage(db,slug='piel-perfecta-20'){
+  const course=db.courses.find(c=>c.slug===slug);
+  if(!course) return null;
+  const modules=db.modules.filter(m=>m.courseId===course.id).sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0));
+  const moduleRows=modules.map(module=>({
+    code:module.code,
+    title:module.title,
+    position:Number(module.position)||0,
+    sourceStatus:module.status,
+    lessons:db.lessons.filter(l=>l.moduleId===module.id).sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0)).map(lesson=>{
+      const assessment=assessmentForScope(db,'lesson',lesson.id);
+      return {
+        code:lesson.code,
+        title:lesson.title,
+        summary:lesson.summary||'',
+        position:Number(lesson.position)||0,
+        durationMinutes:Number(lesson.durationMinutes)||0,
+        sourceStatus:lesson.status,
+        tutorApproved:lesson.tutorApproved===true,
+        tutorContent:String(lesson.tutorContent||''),
+        plannedResources:Array.isArray(lesson.plannedResources)?lesson.plannedResources.map(x=>({...x})):[],
+        videos:lessonVideos(lesson).map(v=>({
+          ref:String(v.ref||''),
+          name:String(v.name||''),
+          mime:String(v.mime||'video/mp4'),
+          size:Number(v.size)||null,
+          position:Number(v.position)||0
+        })),
+        resources:(lesson.resources||[]).map(r=>({
+          name:String(r.name||''),
+          mime:String(r.mime||'application/octet-stream'),
+          size:Number(r.size)||null,
+          generatedKey:r.generatedKey||null,
+          storageName:r.storageName||null
+        })),
+        assessment:assessment?{
+          title:assessment.title,
+          instructions:assessment.instructions||'',
+          passingScore:Number(assessment.passingScore)||0,
+          maxAttempts:Number(assessment.maxAttempts)||0,
+          sourceStatus:assessment.status,
+          questions:db.questions.filter(q=>q.assessmentId===assessment.id).sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0)).map(q=>({
+            prompt:q.prompt,
+            type:q.type||'single_choice',
+            options:Array.isArray(q.options)?q.options.slice():[],
+            correctOption:Number(q.correctOption)||0,
+            explanation:q.explanation||'',
+            position:Number(q.position)||0
+          }))
+        }:null
+      };
+    })
+  }));
+  const allLessons=moduleRows.flatMap(m=>m.lessons);
+  const videoRefs=allLessons.flatMap(l=>l.videos).filter(v=>String(v.ref||'').startsWith('blob:'));
+  const resourceRefs=allLessons.flatMap(l=>l.resources).filter(r=>r.storageName);
+  const readiness=courseSaleReadiness(db,course);
+  const core={
+    format:'lykios-course-transfer-v1',
+    exportedAt:now(),
+    source:{
+      environment:VERCEL_ENV||NODE_ENV,
+      appVersion:APP_VERSION,
+      schemaVersion:db.meta?.schemaVersion||null,
+      storage:currentTransferStorageFingerprint()
+    },
+    course:{
+      slug:course.slug,
+      title:course.title,
+      subtitle:course.subtitle||'',
+      description:course.description||'',
+      priceCents:Number(course.priceCents)||0,
+      currency:course.currency||'EUR',
+      certificateEnabled:course.certificateEnabled!==false,
+      sequentialAccess:course.sequentialAccess===true,
+      sourceStatus:course.status,
+      sourceSaleEnabled:course.saleEnabled!==false,
+      modules:moduleRows
+    },
+    readiness,
+    manifest:{
+      modules:moduleRows.length,
+      lessons:allLessons.length,
+      videos:videoRefs.length,
+      videoBytes:videoRefs.reduce((n,v)=>n+(Number(v.size)||0),0),
+      resources:allLessons.reduce((n,l)=>n+l.resources.length,0),
+      physicalResources:resourceRefs.length,
+      assessments:allLessons.filter(l=>l.assessment).length,
+      questions:allLessons.reduce((n,l)=>n+(l.assessment?.questions?.length||0),0)
+    }
+  };
+  return {...core,checksum:{algorithm:'sha256',value:transferChecksum(core)}};
+}
+function transferTargetUsage(db,course){
+  if(!course)return {enrollments:0,orders:0,certificates:0,progress:0,attempts:0};
+  const lessonIds=new Set(db.lessons.filter(l=>l.courseId===course.id).map(l=>l.id));
+  const assessmentIds=new Set(db.assessments.filter(a=>a.scopeType==='lesson'&&lessonIds.has(a.scopeId)).map(a=>a.id));
+  const enrollmentIds=new Set(db.enrollments.filter(e=>e.courseId===course.id).map(e=>e.id));
+  return {
+    enrollments:enrollmentIds.size,
+    orders:(db.orders||[]).filter(o=>o.courseId===course.id).length,
+    certificates:(db.certificates||[]).filter(c=>c.courseId===course.id).length,
+    progress:(db.progress||[]).filter(p=>enrollmentIds.has(p.enrollmentId)).length,
+    attempts:(db.attempts||[]).filter(a=>assessmentIds.has(a.assessmentId)).length
+  };
+}
+async function verifyTransferBlobRefs(pkg){
+  const refs=[];
+  for(const module of pkg?.course?.modules||[]){
+    for(const lesson of module.lessons||[]){
+      for(const video of lesson.videos||[]){
+        if(String(video.ref||'').startsWith('blob:')) refs.push({kind:'video',ref:String(video.ref).slice(5),name:video.name||lesson.code,expectedSize:Number(video.size)||null});
+      }
+      for(const resource of lesson.resources||[]){
+        if(resource.storageName) refs.push({kind:'resource',ref:String(resource.storageName),name:resource.name||lesson.code,expectedSize:Number(resource.size)||null});
+      }
+    }
+  }
+  if(!refs.length) return {checked:0,accessible:0,missing:[],sizeMismatch:[]};
+  if(FILE_BACKEND!=='blob') return {checked:refs.length,accessible:0,missing:refs.map(x=>({...x,reason:'El entorno destino no usa Vercel Blob'})),sizeMismatch:[]};
+  const {head}=await import('@vercel/blob');
+  const results=await Promise.all(refs.map(async item=>{
+    try{
+      const meta=await head(item.ref);
+      return {...item,ok:true,actualSize:Number(meta?.size)||null};
+    }catch(error){
+      return {...item,ok:false,reason:error?.message||'Blob no accesible'};
+    }
+  }));
+  return {
+    checked:results.length,
+    accessible:results.filter(x=>x.ok).length,
+    missing:results.filter(x=>!x.ok).map(({ok,...x})=>x),
+    sizeMismatch:results.filter(x=>x.ok&&x.expectedSize&&x.actualSize&&x.expectedSize!==x.actualSize).map(({ok,...x})=>x)
+  };
+}
+async function validateCourseTransferPackage(db,pkg,{checkBlobs=true}={}){
+  const issues=[],warnings=[];
+  if(!pkg||pkg.format!=='lykios-course-transfer-v1') issues.push('Formato de paquete no compatible');
+  const checksumValue=pkg?.checksum?.value;
+  if(pkg&&checksumValue){
+    const {checksum,...core}=pkg;
+    if(transferChecksum(core)!==checksumValue) issues.push('El checksum del paquete no coincide');
+  }else issues.push('El paquete no incluye checksum');
+  if(pkg?.course?.slug!=='piel-perfecta-20') issues.push('El paquete no corresponde a Piel Perfecta 2.0');
+
+  const modules=Array.isArray(pkg?.course?.modules)?pkg.course.modules:[];
+  const lessons=modules.flatMap(m=>Array.isArray(m.lessons)?m.lessons:[]);
+  const assessments=lessons.filter(l=>l.assessment);
+  const questions=assessments.flatMap(l=>l.assessment?.questions||[]);
+  const resources=lessons.flatMap(l=>l.resources||[]);
+  const generatedResources=resources.filter(r=>String(r.generatedKey||'').startsWith('piel-perfecta:'));
+  const tutorApproved=lessons.filter(l=>l.tutorApproved===true&&String(l.tutorContent||'').trim()).length;
+  const lessonsWithVideo=lessons.filter(l=>(l.videos||[]).length>0).length;
+  const moduleCodes=modules.map(m=>m.code),lessonCodes=lessons.map(l=>l.code);
+  if(modules.length!==11) issues.push('Se esperaban 11 módulos y hay '+modules.length);
+  if(lessons.length!==33) issues.push('Se esperaban 33 clases y hay '+lessons.length);
+  if(new Set(moduleCodes).size!==moduleCodes.length) issues.push('Hay códigos de módulo duplicados');
+  if(new Set(lessonCodes).size!==lessonCodes.length) issues.push('Hay códigos de clase duplicados');
+  if(lessonsWithVideo!==33) issues.push('Faltan vídeos en '+(33-lessonsWithVideo)+' clases');
+  if(generatedResources.length<11) issues.push('Faltan recursos generados de Piel Perfecta');
+  if(assessments.length!==10) issues.push('Se esperaban 10 evaluaciones y hay '+assessments.length);
+  if(questions.length!==50) issues.push('Se esperaban 50 preguntas/criterios y hay '+questions.length);
+  if(tutorApproved!==33) issues.push('El Tutor IA solo está aprobado en '+tutorApproved+'/33 clases');
+  if(pkg?.course?.sequentialAccess!==true) issues.push('La ruta secuencial no está activada');
+  if(pkg?.readiness?.ready!==true) issues.push('El paquete se exportó antes de superar el checklist de lanzamiento en Preview');
+
+  const currentStorage=currentTransferStorageFingerprint();
+  const sourceStorage=pkg?.source?.storage||{};
+  const sharedDatabase=Boolean(sourceStorage.database&&currentStorage.database&&sourceStorage.database===currentStorage.database);
+  const sameBlobCredential=Boolean(sourceStorage.blobCredential&&currentStorage.blobCredential&&sourceStorage.blobCredential===currentStorage.blobCredential);
+  if(sharedDatabase&&String(pkg?.source?.environment)!==String(VERCEL_ENV||NODE_ENV)) warnings.push('Origen y destino apuntan a la misma base de datos; no debe ejecutarse una importación destructiva');
+
+  const media=checkBlobs?await verifyTransferBlobRefs(pkg):{checked:0,accessible:0,missing:[],sizeMismatch:[]};
+  if(checkBlobs&&media.missing.length) issues.push(media.missing.length+' archivos Blob no son accesibles desde este entorno');
+  if(checkBlobs&&media.sizeMismatch.length) issues.push(media.sizeMismatch.length+' archivos Blob no coinciden en tamaño');
+
+  const target=db.courses.find(c=>c.slug==='piel-perfecta-20')||null;
+  const targetUsage=transferTargetUsage(db,target);
+  const targetHasUserData=Object.values(targetUsage).some(n=>Number(n)>0);
+  if(targetHasUserData) issues.push('El curso destino ya tiene actividad de alumnos o ventas y no puede reemplazarse automáticamente');
+
+  const packageValid=issues.length===0;
+  const productionTransfer=IS_PROD&&pkg?.source?.environment==='preview';
+  return {
+    packageValid,
+    canImport:packageValid&&productionTransfer&&!sharedDatabase&&!targetHasUserData,
+    environment:VERCEL_ENV||NODE_ENV,
+    sourceEnvironment:pkg?.source?.environment||null,
+    counts:{modules:modules.length,lessons:lessons.length,lessonsWithVideo,resources:resources.length,generatedResources:generatedResources.length,assessments:assessments.length,questions:questions.length,tutorApproved},
+    storage:{source:sourceStorage,current:currentStorage,sharedDatabase,sameBlobCredential},
+    media,
+    target:{exists:Boolean(target),usage:targetUsage},
+    issues,
+    warnings
+  };
+}
+async function createCourseTransferBackup(db){
+  if(FILE_BACKEND!=='blob') throw new Error('Production requiere Vercel Blob para crear el backup previo');
+  const exportedAt=now();
+  const payload={format:'lykios-state-backup-v1',reason:'before-course-transfer',appVersion:APP_VERSION,exportedAt,schemaVersion:db.meta?.schemaVersion||null,storageVersion:Number(db.__storageVersion)||null,data:db};
+  const body=JSON.stringify(payload,null,2)+'\n';
+  const checksum=crypto.createHash('sha256').update(body).digest('hex');
+  const stamp=exportedAt.replace(/[:.]/g,'-');
+  const pathname='backups/course-transfer/lykios-before-piel-perfecta-'+stamp+'.json';
+  const {put,head}=await import('@vercel/blob');
+  const saved=await put(pathname,Buffer.from(body,'utf8'),{access:'private',contentType:'application/json',addRandomSuffix:false});
+  const meta=await head(saved.pathname||pathname);
+  if(!meta||Number(meta.size)!==Buffer.byteLength(body,'utf8')) throw new Error('No se pudo verificar el backup previo a la importación');
+  return {pathname:saved.pathname||pathname,sha256:checksum,bytes:Number(meta.size)||Buffer.byteLength(body,'utf8'),exportedAt};
+}
+async function importCourseTransferPackage(db,pkg){
+  const existing=db.courses.find(c=>c.slug==='piel-perfecta-20')||null;
+  const t=now();
+  const courseId=existing?.id||newId();
+  const oldLessonIds=new Set(existing?db.lessons.filter(l=>l.courseId===courseId).map(l=>l.id):[]);
+  const oldAssessmentIds=new Set(db.assessments.filter(a=>a.scopeType==='lesson'&&oldLessonIds.has(a.scopeId)).map(a=>a.id));
+  const oldModuleIds=new Set(existing?db.modules.filter(m=>m.courseId===courseId).map(m=>m.id):[]);
+
+  db.questions=db.questions.filter(q=>!oldAssessmentIds.has(q.assessmentId));
+  db.attempts=db.attempts.filter(a=>!oldAssessmentIds.has(a.assessmentId));
+  db.assessments=db.assessments.filter(a=>!oldAssessmentIds.has(a.id));
+  db.videoProgress=(db.videoProgress||[]).filter(v=>!oldLessonIds.has(v.lessonId));
+  db.progress=(db.progress||[]).filter(p=>!oldLessonIds.has(p.lessonId));
+  db.lessons=db.lessons.filter(l=>!oldLessonIds.has(l.id));
+  db.modules=db.modules.filter(m=>!oldModuleIds.has(m.id));
+  db.tutorQueries=(db.tutorQueries||[]).filter(q=>q.courseId!==courseId&&!oldLessonIds.has(q.lessonId));
+  const remainingQueryIds=new Set((db.tutorQueries||[]).map(q=>q.id));
+  db.tutorFeedback=(db.tutorFeedback||[]).filter(f=>remainingQueryIds.has(f.queryId));
+
+  const source=pkg.course;
+  const course={...(existing||{}),id:courseId,slug:'piel-perfecta-20',title:cleanText(source.title,180),subtitle:cleanText(source.subtitle,300),description:cleanText(source.description,3000),priceCents:Math.max(0,Math.round(Number(source.priceCents)||0)),currency:cleanText(source.currency||'EUR',10)||'EUR',certificateEnabled:source.certificateEnabled!==false,sequentialAccess:source.sequentialAccess===true,status:'draft',saleEnabled:false,createdAt:existing?.createdAt||t,updatedAt:t,importedFrom:'preview',importedAt:t};
+  if(existing){
+    const idx=db.courses.findIndex(c=>c.id===courseId);
+    db.courses[idx]=course;
+  }else db.courses.push(course);
+
+  for(const moduleSource of source.modules||[]){
+    const moduleId=newId();
+    const module={id:moduleId,courseId,code:cleanText(moduleSource.code,40),title:cleanText(moduleSource.title,220),position:Number(moduleSource.position)||positionOf(db.modules,m=>m.courseId===courseId),status:'draft',createdAt:t,updatedAt:t};
+    db.modules.push(module);
+    for(const lessonSource of moduleSource.lessons||[]){
+      const lessonId=newId();
+      const lesson={
+        id:lessonId,moduleId,courseId,
+        code:cleanText(lessonSource.code,40),
+        title:cleanText(lessonSource.title,220),
+        summary:cleanText(lessonSource.summary,5000),
+        position:Number(lessonSource.position)||positionOf(db.lessons,l=>l.moduleId===moduleId),
+        status:'draft',
+        durationMinutes:Math.max(1,Number(lessonSource.durationMinutes)||1),
+        videos:(lessonSource.videos||[]).map((v,i)=>({id:newId(),ref:cleanText(v.ref,1200),name:cleanText(v.name||('Vídeo '+(i+1)),220),mime:cleanText(v.mime||'video/mp4',120),size:Number(v.size)||null,position:Number(v.position)||i+1,createdAt:t})),
+        resources:(lessonSource.resources||[]).map(r=>({id:newId(),name:cleanText(r.name,220),mime:cleanText(r.mime,120),size:Number(r.size)||null,generatedKey:r.generatedKey?cleanText(r.generatedKey,220):null,storageName:r.storageName?cleanText(r.storageName,1200):null,createdAt:t})),
+        plannedResources:Array.isArray(lessonSource.plannedResources)?lessonSource.plannedResources.map(x=>({...x})):[],
+        tutorApproved:lessonSource.tutorApproved===true,
+        tutorContent:cleanText(lessonSource.tutorContent,20000),
+        tutorApprovedAt:lessonSource.tutorApproved===true?t:null,
+        createdAt:t,updatedAt:t
+      };
+      syncPrimaryVideoFields(lesson);
+      db.lessons.push(lesson);
+      if(lessonSource.assessment){
+        const a=lessonSource.assessment;
+        const assessmentId=newId();
+        db.assessments.push({id:assessmentId,scopeType:'lesson',scopeId:lessonId,title:cleanText(a.title,220),instructions:cleanText(a.instructions,3000),passingScore:Math.max(1,Math.min(100,Number(a.passingScore)||80)),maxAttempts:Math.max(0,Number(a.maxAttempts)||0),status:'draft',createdAt:t,updatedAt:t});
+        (a.questions||[]).forEach((q,i)=>db.questions.push({id:newId(),assessmentId,prompt:cleanText(q.prompt,4000),type:'single_choice',options:Array.isArray(q.options)?q.options.map(x=>cleanText(x,1000)):[],correctOption:Math.max(0,Number(q.correctOption)||0),explanation:cleanText(q.explanation,4000),position:Number(q.position)||i+1,createdAt:t,updatedAt:t}));
+      }
+    }
+  }
+  db.meta ||= {};
+  db.meta.courseTransferHistory ||= [];
+  db.meta.courseTransferHistory.push({id:newId(),courseId,slug:course.slug,importedAt:t,sourceEnvironment:pkg.source?.environment||null,sourceExportedAt:pkg.exportedAt||null,checksum:pkg.checksum?.value||null});
+  if(db.meta.courseTransferHistory.length>30) db.meta.courseTransferHistory=db.meta.courseTransferHistory.slice(-30);
+  return course;
+}
+
 function catalogPayload(db){
   const courses=db.courses.filter(c=>c.status==='published'&&c.saleEnabled!==false&&courseSaleReadiness(db,c).ready).map(c=>{const pr=pricingFor(db,'course',c);return {type:'course',id:c.id,slug:c.slug,title:c.title,subtitle:c.subtitle||'',description:c.description||'',priceCents:pr.finalCents,basePriceCents:pr.baseCents,currency:c.currency||'EUR',priceLabel:money(pr.finalCents,c.currency||'EUR'),basePriceLabel:money(pr.baseCents,c.currency||'EUR'),promotion:pr.promo?{id:pr.promo.id,name:pr.promo.name,badge:pr.promo.badge||'Oferta'}:null};});
   const bundles=(db.bundles||[]).filter(b=>b.status==='published'&&b.saleEnabled!==false).map(b=>{const pr=pricingFor(db,'bundle',b);const cs=bundleCourses(db,b);return {type:'bundle',id:b.id,slug:b.slug,title:b.title,subtitle:b.subtitle||'',description:b.description||'',courseIds:b.courseIds||[],courseTitles:cs.map(c=>c.title),priceCents:pr.finalCents,basePriceCents:pr.baseCents,currency:b.currency||'EUR',priceLabel:money(pr.finalCents,b.currency||'EUR'),basePriceLabel:money(pr.baseCents,b.currency||'EUR'),promotion:pr.promo?{id:pr.promo.id,name:pr.promo.name,badge:pr.promo.badge||'Oferta'}:null};});
