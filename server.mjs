@@ -45,6 +45,10 @@ const MAX_RESOURCE_BYTES = 6_000_000;
 const MAX_TEST_VIDEO_BYTES = 3_000_000;
 const MAX_VIDEO_BYTES = 2_000_000_000;
 const VIDEO_TOKEN_TTL_MS = 1000 * 60 * 10;
+const MAX_STUDENT_SESSIONS = 2;
+const VIDEO_LEASE_TTL_MS = 45 * 1000;
+const SECURITY_SCORE_WINDOW_MS = 60 * 60 * 1000;
+const SECURITY_HIGH_RISK_SCORE = 6;
 const VIDEO_TOKEN_SECRET = process.env.LYKIOS_VIDEO_SECRET || (IS_PROD ? '' : crypto.randomBytes(32).toString('hex'));
 
 if (ON_VERCEL) {
@@ -96,6 +100,159 @@ function clientIp(req){
     if(real)return cleanText(real,80);
   }
   return cleanText(req.socket.remoteAddress||'unknown',80);
+}
+function maskIp(value){
+  const ip=String(value||'unknown').trim();
+  if(/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)){
+    const p=ip.split('.'); return p.slice(0,3).join('.')+'.x';
+  }
+  if(ip.includes(':')){
+    const p=ip.split(':').filter(Boolean); return p.slice(0,4).join(':')+'::/64';
+  }
+  return ip==='unknown'?'unknown':'red protegida';
+}
+function securityHash(value){
+  return crypto.createHmac('sha256',VIDEO_TOKEN_SECRET||'lykios-preview-security').update(String(value||'')).digest('hex').slice(0,24);
+}
+function deviceLabelFromUa(ua=''){
+  const value=String(ua||'');
+  const browser=/Edg\//.test(value)?'Edge':/Chrome\//.test(value)?'Chrome':/Safari\//.test(value)&&!/Chrome\//.test(value)?'Safari':/Firefox\//.test(value)?'Firefox':'Navegador';
+  const platform=/iPhone|iPad/.test(value)?'iPhone/iPad':/Android/.test(value)?'Android':/Macintosh|Mac OS X/.test(value)?'Mac':/Windows/.test(value)?'Windows':/Linux/.test(value)?'Linux':'Dispositivo';
+  return browser+' · '+platform;
+}
+function requestSecurityContext(req){
+  if(!req)return {deviceKey:null,deviceLabel:'Sesión web',ipHash:null,ipLabel:'unknown',userAgent:''};
+  const rawDevice=cleanText(req.headers['x-lykios-device-id']||'',160);
+  const ip=clientIp(req);
+  const ua=cleanText(req.headers['user-agent']||'',500);
+  return {
+    deviceKey:rawDevice?crypto.createHash('sha256').update(rawDevice).digest('hex').slice(0,32):null,
+    deviceLabel:deviceLabelFromUa(ua),
+    ipHash:ip&&ip!=='unknown'?securityHash(ip):null,
+    ipLabel:maskIp(ip),
+    userAgent:ua
+  };
+}
+function securityEvent(db,{userId,type,label,score=0,sessionId=null,deviceKey=null,deviceLabel=null,ipLabel=null,meta={},dedupeMinutes=0}){
+  db.securityEvents ||= [];
+  const cutoff=dedupeMinutes?Date.now()-dedupeMinutes*60*1000:0;
+  if(dedupeMinutes){
+    const duplicate=db.securityEvents.find(e=>e.userId===userId&&e.type===type&&String(e.deviceKey||'')===String(deviceKey||'')&&new Date(e.at).getTime()>=cutoff);
+    if(duplicate)return null;
+  }
+  const item={id:newId(),userId,type,label:cleanText(label,300),score:Math.max(0,Number(score)||0),sessionId,deviceKey,deviceLabel:cleanText(deviceLabel||'',120)||null,ipLabel:cleanText(ipLabel||'',100)||null,meta,at:now()};
+  db.securityEvents.push(item);
+  if(db.securityEvents.length>5000)db.securityEvents=db.securityEvents.slice(-5000);
+  return item;
+}
+function recentSecurityScore(db,userId,windowMs=SECURITY_SCORE_WINDOW_MS){
+  const cutoff=Date.now()-windowMs;
+  return (db.securityEvents||[]).filter(e=>e.userId===userId&&new Date(e.at).getTime()>=cutoff).reduce((n,e)=>n+(Number(e.score)||0),0);
+}
+function registerKnownDevice(db,user,ctx,{notify=true}={}){
+  db.knownDevices ||= [];
+  if(!ctx.deviceKey)return {device:null,isNew:false,networkChanged:false};
+  let device=db.knownDevices.find(d=>d.userId===user.id&&d.deviceKey===ctx.deviceKey)||null;
+  const isNew=!device;
+  const networkChanged=Boolean(device?.lastIpHash&&ctx.ipHash&&device.lastIpHash!==ctx.ipHash);
+  if(!device){
+    device={id:newId(),userId:user.id,deviceKey:ctx.deviceKey,label:ctx.deviceLabel,firstSeenAt:now(),lastSeenAt:now(),lastIpHash:ctx.ipHash,lastIpLabel:ctx.ipLabel,status:'known'};
+    db.knownDevices.push(device);
+    securityEvent(db,{userId:user.id,type:'new_device',label:'Nuevo dispositivo: '+ctx.deviceLabel,score:1,deviceKey:ctx.deviceKey,deviceLabel:ctx.deviceLabel,ipLabel:ctx.ipLabel,dedupeMinutes:60});
+    if(notify&&user.role==='student'&&user.lastLoginAt){
+      queueEmail(db,{to:user.email,type:'new_device',userId:user.id,meta:{deviceLabel:ctx.deviceLabel,ipLabel:ctx.ipLabel}});
+      markLocalEmailsSent(db);
+    }
+  }else{
+    device.label=ctx.deviceLabel||device.label;
+    device.lastSeenAt=now();
+    if(networkChanged)securityEvent(db,{userId:user.id,type:'network_changed',label:'Cambio de red en '+ctx.deviceLabel,score:1,deviceKey:ctx.deviceKey,deviceLabel:ctx.deviceLabel,ipLabel:ctx.ipLabel,dedupeMinutes:60});
+    device.lastIpHash=ctx.ipHash||device.lastIpHash;
+    device.lastIpLabel=ctx.ipLabel||device.lastIpLabel;
+  }
+  return {device,isNew,networkChanged};
+}
+function currentSession(req,db){
+  const sid=parseCookies(req).lykios_session;
+  if(!sid)return null;
+  const sidHash=sessionTokenHash(sid);
+  return (db.sessions||[]).find(s=>(s.tokenHash===sidHash||s.token===sid)&&new Date(s.expiresAt)>new Date())||null;
+}
+function trimStudentSessions(db,user,keepSessionId=null){
+  const t=Date.now();
+  db.sessions=(db.sessions||[]).filter(s=>new Date(s.expiresAt).getTime()>t);
+  if(user.role!=='student')return [];
+  let rows=db.sessions.filter(s=>s.userId===user.id).sort((a,b)=>new Date(b.lastSeenAt||b.createdAt)-new Date(a.lastSeenAt||a.createdAt));
+  const keep=new Set(rows.slice(0,MAX_STUDENT_SESSIONS).map(x=>x.id));
+  if(keepSessionId)keep.add(keepSessionId);
+  while(keep.size>MAX_STUDENT_SESSIONS){
+    const removable=rows.slice().reverse().find(x=>keep.has(x.id)&&x.id!==keepSessionId);
+    if(!removable)break;
+    keep.delete(removable.id);
+  }
+  const evicted=rows.filter(x=>!keep.has(x.id));
+  if(evicted.length){
+    const ids=new Set(evicted.map(x=>x.id));
+    db.sessions=db.sessions.filter(x=>!ids.has(x.id));
+    evicted.forEach(x=>securityEvent(db,{userId:user.id,type:'session_limit',label:'Sesión antigua cerrada al superar el límite de 2 dispositivos',score:2,sessionId:x.id,deviceKey:x.deviceKey,deviceLabel:x.deviceLabel,ipLabel:x.ipLabel,dedupeMinutes:5}));
+  }
+  return evicted;
+}
+function createManagedSession(db,user,{req=null,context=null,source='login',notifyNewDevice=true}={}){
+  db.sessions ||= [];
+  const ctx=context||requestSecurityContext(req);
+  registerKnownDevice(db,user,ctx,{notify:notifyNewDevice});
+  if(user.role==='student'&&ctx.deviceKey){
+    db.sessions=db.sessions.filter(s=>!(s.userId===user.id&&s.deviceKey===ctx.deviceKey));
+  }
+  const token=crypto.randomBytes(32).toString('base64url');
+  const session={id:newId(),tokenHash:sessionTokenHash(token),userId:user.id,deviceKey:ctx.deviceKey,deviceLabel:ctx.deviceLabel,ipHash:ctx.ipHash,ipLabel:ctx.ipLabel,source,createdAt:now(),lastSeenAt:now(),expiresAt:new Date(Date.now()+SESSION_TTL_MS).toISOString()};
+  db.sessions.push(session);
+  trimStudentSessions(db,user,session.id);
+  if(user.role==='student'&&recentSecurityScore(db,user.id)>=SECURITY_HIGH_RISK_SCORE){
+    const event=securityEvent(db,{userId:user.id,type:'high_risk_login',label:'Actividad de acceso inusual detectada',score:0,sessionId:session.id,deviceKey:ctx.deviceKey,deviceLabel:ctx.deviceLabel,ipLabel:ctx.ipLabel,dedupeMinutes:60});
+    db.sessions=db.sessions.filter(s=>s.userId!==user.id||s.id===session.id);
+    if(event){
+      queueEmail(db,{to:user.email,type:'security_alert',userId:user.id,meta:{deviceLabel:ctx.deviceLabel,ipLabel:ctx.ipLabel}});
+      markLocalEmailsSent(db);
+    }
+  }
+  return {token,session,context:ctx};
+}
+function releaseVideoLease(db,userId,sessionId){
+  db.videoLeases ||= [];
+  const before=db.videoLeases.length;
+  db.videoLeases=db.videoLeases.filter(l=>!(l.userId===userId&&l.sessionId===sessionId));
+  return before!==db.videoLeases.length;
+}
+function acquireVideoLease(db,user,session,{lessonId,videoId,reserveMs=VIDEO_LEASE_TTL_MS}={}){
+  db.videoLeases ||= [];
+  const t=Date.now();
+  db.videoLeases=db.videoLeases.filter(l=>new Date(l.expiresAt).getTime()>t);
+  const other=db.videoLeases.find(l=>l.userId===user.id&&l.sessionId!==session.id);
+  if(other){
+    securityEvent(db,{userId:user.id,type:'simultaneous_video',label:'Reproducción simultánea detectada en otro dispositivo',score:4,sessionId:session.id,deviceKey:session.deviceKey,deviceLabel:session.deviceLabel,ipLabel:session.ipLabel,dedupeMinutes:2});
+    return {ok:false,other};
+  }
+  let lease=db.videoLeases.find(l=>l.userId===user.id&&l.sessionId===session.id)||null;
+  if(!lease){
+    lease={id:newId(),userId:user.id,sessionId:session.id,lessonId,videoId,startedAt:now(),lastSeenAt:now(),expiresAt:new Date(t+reserveMs).toISOString()};
+    db.videoLeases.push(lease);
+  }else{
+    lease.lessonId=lessonId;lease.videoId=videoId;lease.lastSeenAt=now();lease.expiresAt=new Date(t+reserveMs).toISOString();
+  }
+  return {ok:true,lease};
+}
+function enforceHighRiskAfterPlayback(db,user,session){
+  if(user.role!=='student'||recentSecurityScore(db,user.id)<SECURITY_HIGH_RISK_SCORE)return false;
+  const event=securityEvent(db,{userId:user.id,type:'high_risk_activity',label:'Patrón de acceso incompatible con uso personal',score:0,sessionId:session.id,deviceKey:session.deviceKey,deviceLabel:session.deviceLabel,ipLabel:session.ipLabel,dedupeMinutes:60});
+  db.sessions=db.sessions.filter(s=>s.userId!==user.id||s.id===session.id);
+  db.videoLeases=(db.videoLeases||[]).filter(l=>l.userId!==user.id||l.sessionId===session.id);
+  if(event){
+    queueEmail(db,{to:user.email,type:'security_alert',userId:user.id,meta:{deviceLabel:session.deviceLabel,ipLabel:session.ipLabel}});
+    markLocalEmailsSent(db);
+  }
+  return Boolean(event);
 }
 const rateBuckets=new Map();
 function rateLimit(key,limit,windowMs){
