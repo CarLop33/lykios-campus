@@ -3084,7 +3084,7 @@ export const handleRequest=async (req,res)=>{
         if(url.pathname==='/api/admin/course-transfer/validate' && req.method==='POST'){
           const body=await readBody(req);
           const validation=await validateCourseTransferPackage(db,body.package,{checkBlobs:body.checkBlobs!==false});
-          return json(res,validation.packageValid?200:409,{validation});
+          return json(res,200,{validation});
         }
         if(url.pathname==='/api/admin/course-transfer/import' && req.method==='POST'){
           if(!IS_PROD)return json(res,403,{error:'La importación real solo está habilitada en Production'});
