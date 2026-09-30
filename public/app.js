@@ -102,6 +102,8 @@ function renderPielPerfectaLaunchPanel(){
   if(!d)return '';
   const r=d.readiness||{},l=d.launch||{};
   const item=(ok,label,detail)=>'<div class="student-line"><span>'+(ok?'✅':'○')+' <b>'+esc(label)+'</b></span><span class="muted">'+esc(detail||'')+'</span></div>';
+  const env=String(d.environment||'preview');
+  const transferLabel=env==='production'?'Validar paquete para importar':'Validar paquete de traspaso';
   return '<div class="card" style="margin-bottom:18px">'
     +'<div class="question-editor-head"><div><div class="page-kicker">PIEL PERFECTA 2.0</div><h3>Checklist de lanzamiento</h3></div><span class="status-pill '+(r.ready?'published':'draft')+'">'+(r.ready?'LISTO':'EN PREPARACIÓN')+'</span></div>'
     +item(l.academicReady,'Arquitectura académica',(r.modules||0)+'/11 módulos · '+(r.lessons||0)+'/33 clases · '+(r.assessments||0)+'/10 evaluaciones · '+(r.questions||0)+'/50 preguntas')
@@ -110,8 +112,73 @@ function renderPielPerfectaLaunchPanel(){
     +item((r.tutorApproved||0)===33,'Lykios AI Tutor',(r.tutorApproved||0)+'/33 clases aprobadas')
     +item(d.course?.status==='published','Publicación académica',d.course?.status==='published'?'Publicada':'En borrador')
     +item(d.course?.saleEnabled===true,'Venta',d.course?.saleEnabled?'Habilitada':'Desactivada')
-    +'<p class="muted" style="margin:12px 0 0">Entorno: '+esc(d.environment||'preview')+' · Stripe '+(l.stripeConfigured?'configurado':'pendiente')+' · Resend '+(l.resendConfigured?'configurado':'pendiente')+'</p>'
+    +'<p class="muted" style="margin:12px 0 0">Entorno: '+esc(env)+' · Stripe '+(l.stripeConfigured?'configurado':'pendiente')+' · Resend '+(l.resendConfigured?'configurado':'pendiente')+'</p>'
+    +'<div class="drawer-actions" style="justify-content:flex-start;margin-top:14px">'
+      +'<button class="btn-secondary" onclick="exportPielPerfectaTransfer()">↓ Exportar paquete</button>'
+      +'<label class="upload-label">'+esc(transferLabel)+'<input type="file" accept=".json,application/json" data-course-transfer-file hidden></label>'
+    +'</div>'
+    +'<div id="courseTransferStatus" class="muted" style="margin-top:10px">El paquete contiene solo el curso y referencias a medios; nunca incluye alumnos, ventas ni contraseñas.</div>'
     +'</div>';
+}
+async function exportPielPerfectaTransfer(){
+  const box=$('#courseTransferStatus');
+  try{
+    if(box)box.textContent='Preparando paquete de curso…';
+    const r=await api('/api/admin/course-transfer/export',{method:'POST',body:JSON.stringify({slug:'piel-perfecta-20'})});
+    const pkg=r.package;
+    const blob=new Blob([JSON.stringify(pkg,null,2)+'\n'],{type:'application/json'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    const stamp=String(pkg.exportedAt||new Date().toISOString()).replace(/[:.]/g,'-');
+    a.href=url;a.download='piel-perfecta-transfer-'+stamp+'.json';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+    const m=pkg.manifest||{};
+    if(box)box.innerHTML='<b>Paquete exportado.</b> '+(m.modules||0)+' módulos · '+(m.lessons||0)+' clases · '+(m.videos||0)+' vídeos · checksum '+esc(String(pkg.checksum?.value||'').slice(0,12))+'…';
+    toast(pkg.readiness?.ready?'Paquete final exportado':'Paquete preliminar exportado');
+  }catch(e){if(box)box.textContent=e.message;toast(e.message,'error')}
+}
+async function validatePielPerfectaTransferFile(input){
+  const box=$('#courseTransferStatus');
+  try{
+    const file=input.files?.[0];if(!file)return;
+    if(box)box.textContent='Validando integridad, estructura y acceso a los medios…';
+    const pkg=JSON.parse(await file.text());
+    const r=await api('/api/admin/course-transfer/validate',{method:'POST',body:JSON.stringify({package:pkg,checkBlobs:true})});
+    const v=r.validation||{};
+    state.pendingCourseTransfer=pkg;
+    state.pendingCourseTransferValidation=v;
+    const issues=(v.issues||[]).map(x=>'• '+esc(x)).join('<br>');
+    const warnings=(v.warnings||[]).map(x=>'• '+esc(x)).join('<br>');
+    const media=v.media||{};
+    let html='<p><b>'+(v.packageValid?'✅ Paquete válido':'⚠️ Paquete todavía no importable')+'</b></p>'
+      +'<div class="student-line"><span>Estructura</span><span>'+esc((v.counts?.modules||0)+' módulos · '+(v.counts?.lessons||0)+' clases')+'</span></div>'
+      +'<div class="student-line"><span>Vídeos accesibles</span><span>'+esc((media.accessible||0)+'/'+(media.checked||0))+'</span></div>'
+      +'<div class="student-line"><span>Base de datos compartida</span><span>'+(v.storage?.sharedDatabase?'Sí':'No')+'</span></div>';
+    if(issues)html+='<p class="danger-text"><b>Bloqueos</b><br>'+issues+'</p>';
+    if(warnings)html+='<p class="muted"><b>Avisos</b><br>'+warnings+'</p>';
+    if(v.canImport)html+='<button class="btn gold" onclick="commitPielPerfectaTransfer()">Importar en Production</button>';
+    else html+='<p class="muted">No se ha modificado ningún dato.</p>';
+    if(box)box.innerHTML=html;
+    toast(v.packageValid?'Paquete validado':'Revisa los bloqueos',v.packageValid?'ok':'error');
+  }catch(e){
+    state.pendingCourseTransfer=null;state.pendingCourseTransferValidation=null;
+    if(box)box.innerHTML='<span class="danger-text">'+esc(e.message)+'</span>';
+    toast(e.message,'error');
+  }finally{input.value=''}
+}
+async function commitPielPerfectaTransfer(){
+  const pkg=state.pendingCourseTransfer,v=state.pendingCourseTransferValidation;
+  if(!pkg||!v?.canImport)return toast('Primero valida un paquete importable','error');
+  const confirmText=prompt('Escribe exactamente IMPORTAR PIEL PERFECTA para crear el backup y copiar el curso a Production.');
+  if(confirmText!=='IMPORTAR PIEL PERFECTA')return toast('Importación cancelada','error');
+  const box=$('#courseTransferStatus');
+  try{
+    if(box)box.textContent='Creando backup de Production e importando el curso…';
+    const r=await api('/api/admin/course-transfer/import',{method:'POST',body:JSON.stringify({package:pkg,confirm:confirmText})});
+    if(box)box.innerHTML='<p><b>✅ Curso importado en Production como borrador.</b></p><p class="muted">Backup previo: '+esc(r.backup?.pathname||'creado')+'. La venta permanece desactivada hasta la validación final.</p>';
+    state.pendingCourseTransfer=null;state.pendingCourseTransferValidation=null;
+    toast('Piel Perfecta importado como borrador');
+    await renderAdmin();
+  }catch(e){if(box)box.textContent=e.message;toast(e.message,'error')}
 }
 async function renderAdmin(){
   if(state.me.role!=='admin')return setRoute('dashboard');
@@ -382,6 +449,7 @@ document.addEventListener('change',e=>{
   const input=e.target;
   if(!(input instanceof HTMLInputElement)||input.type!=='file')return;
   if(input.dataset.bulkVideoCourse){bulkUploadPielPerfectaVideos(input.dataset.bulkVideoCourse,input);return}
+  if(input.hasAttribute('data-course-transfer-file')){validatePielPerfectaTransferFile(input);return}
   if(input.dataset.videoAction){uploadTestVideo(input.dataset.lessonId,input,input.dataset.videoAction,input.dataset.videoId||'');return}
   if(input.dataset.resourceLesson){uploadResource(input.dataset.resourceLesson,input);return}
   if(input.dataset.teacherResourceLesson){teacherUploadResource(input.dataset.teacherResourceLesson,input);return}
@@ -395,7 +463,7 @@ const SAFE_CLICK_ACTIONS=new Set([
   'setRoute','logout','openForgotPassword','openStore','render','openCheckout','validateCoupon',
   'openCourse','issueCertificate','openLesson','completeLesson','openAssessment','renderAssessment',
   'openTutorSource','sendTutorFeedback','openBundleForm','openCouponForm','openPromotionForm',
-  'deleteMonetization','publishPielPerfectaReady','closeDrawer','openTeacherModuleForm','openTeacherLessonForm','openCourseForm',
+  'deleteMonetization','publishPielPerfectaReady','exportPielPerfectaTransfer','commitPielPerfectaTransfer','closeDrawer','openTeacherModuleForm','openTeacherLessonForm','openCourseForm',
   'openTeacherAdminForm','unassignTeacher','assignTeacher','openStudent','toggleStudentStatus',
   'manualEnroll','removeEnrollment','sendCourseCompletedTest','sendCertificateTest','sendReminderTest','sendStudentReminder','runConcurrencySelfTest','runPreviewClosure','flushEmailQueue','retryAdminEmail','resetStudentProgress','revokeCertificate',
   'toggleCourseStatus','deleteCourse','openModuleForm','openAssessmentForm','toggleModuleStatus',
@@ -467,5 +535,5 @@ document.addEventListener('click',event=>{
 
 window.addEventListener('beforeunload',()=>{const a=activeLessonVideo;if(!a?.element?.duration)return;try{navigator.sendBeacon?.('/api/video/progress',new Blob([JSON.stringify({lessonId:a.lessonId,videoId:a.videoId,currentTime:a.element.currentTime,duration:a.element.duration})],{type:'application/json'}))}catch{}})
 function render(route){if(route==='store')return openStore();if(route==='login'||!state.me)return renderLogin();({dashboard:renderDashboard,courses:renderCourses,course:renderCourse,lesson:renderLesson,assessment:renderAssessment,profile:renderProfile,teacher:renderTeacher,admin:renderAdmin}[route]||renderDashboard)()}
-Object.assign(window,{render,issueCertificate,revokeCertificate,setRoute,openCourse,logout,openStore,openForgotPassword,forgotPassword,renderResetPassword,resetPassword,openCheckout,validateCoupon,checkoutMock,checkoutReal,confirmPaymentReturn,openStudent,saveStudentProfile,toggleStudentStatus,manualEnroll,removeEnrollment,resetStudentProgress,addStudentNote,sendStudentWelcome,sendPurchaseTest,sendCourseCompletedTest,sendCertificateTest,sendReminderTest,sendStudentReminder,runConcurrencySelfTest,runPreviewClosure,saveStudentProfileById,flushEmailQueue,retryAdminEmail,openLesson,initLessonVideo,completeLesson,openAssessment,renderAssessment,openCourseForm,openModuleForm,openLessonForm,openAssessmentForm,openQuestionForm,reopenAssessment,deleteQuestion,deleteAssessment,closeDrawer,toggleCourseStatus,toggleModuleStatus,toggleLessonStatus,deleteCourse,deleteModule,deleteLesson,uploadResource,deleteResource,uploadTestVideo,deleteTestVideo,publishPielPerfectaReady,bulkUploadPielPerfectaVideos,openBundleForm,saveBundle,openCouponForm,saveCoupon,openPromotionForm,savePromotion,deleteMonetization,renderTeacher,openTeacherModuleForm,openTeacherLessonForm,teacherUploadResource,openTeacherAdminForm,assignTeacher,unassignTeacher,askTutor,sendTutorFeedback,saveTutorPolicy,openTutorSource,state});
+Object.assign(window,{render,issueCertificate,revokeCertificate,setRoute,openCourse,logout,openStore,openForgotPassword,forgotPassword,renderResetPassword,resetPassword,openCheckout,validateCoupon,checkoutMock,checkoutReal,confirmPaymentReturn,openStudent,saveStudentProfile,toggleStudentStatus,manualEnroll,removeEnrollment,resetStudentProgress,addStudentNote,sendStudentWelcome,sendPurchaseTest,sendCourseCompletedTest,sendCertificateTest,sendReminderTest,sendStudentReminder,runConcurrencySelfTest,runPreviewClosure,saveStudentProfileById,flushEmailQueue,retryAdminEmail,openLesson,initLessonVideo,completeLesson,openAssessment,renderAssessment,openCourseForm,openModuleForm,openLessonForm,openAssessmentForm,openQuestionForm,reopenAssessment,deleteQuestion,deleteAssessment,closeDrawer,toggleCourseStatus,toggleModuleStatus,toggleLessonStatus,deleteCourse,deleteModule,deleteLesson,uploadResource,deleteResource,uploadTestVideo,deleteTestVideo,publishPielPerfectaReady,bulkUploadPielPerfectaVideos,exportPielPerfectaTransfer,validatePielPerfectaTransferFile,commitPielPerfectaTransfer,openBundleForm,saveBundle,openCouponForm,saveCoupon,openPromotionForm,savePromotion,deleteMonetization,renderTeacher,openTeacherModuleForm,openTeacherLessonForm,teacherUploadResource,openTeacherAdminForm,assignTeacher,unassignTeacher,askTutor,sendTutorFeedback,saveTutorPolicy,openTutorSource,state});
 setTimeout(()=>bootstrap(),0);
