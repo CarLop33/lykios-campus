@@ -1037,9 +1037,11 @@ function coursePayload(db, user, slug='peeling-quimico'){
     lessons:db.lessons.filter(l=>l.moduleId===m.id && (user.role==='admin'||l.status==='published')).sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0)).map(l=>{
       const completion=(()=>{const st=lessonCompletionStatus(db,user,l);return {...st,completed:enrollment?lessonIsComplete(db,user,enrollment,l):false};})();
       const seq=sequenceState(db,user,l);
+      const {video,videoId,videoName,videoMime,videoSize,videos:storedVideos,resources:storedResources,...publicLesson}=l;
       return {
-        ...l,
-        videos:lessonVideos(l).map(v=>({...v,progress:videoProgressPayload(db,user,l.id,v.id)})),
+        ...publicLesson,
+        resources:(storedResources||[]).map(r=>({id:r.id,name:r.name,mime:r.mime,size:r.size||null,generatedKey:r.generatedKey||null,createdAt:r.createdAt||null})),
+        videos:lessonVideos(l).map(v=>({id:v.id,name:v.name,mime:v.mime,size:v.size||null,position:v.position,createdAt:v.createdAt||null,progress:videoProgressPayload(db,user,l.id,v.id)})),
         videoProgress:videoProgressPayload(db,user,l.id),
         completionStatus:completion,
         assessment:(()=>{const a=assessmentForScope(db,'lesson',l.id);return a&&a.status==='published'?{id:a.id,title:a.title,passingScore:a.passingScore,maxAttempts:a.maxAttempts,passed:db.attempts.some(x=>x.userId===user.id&&x.assessmentId===a.id&&x.passed)}:null})(),
@@ -2364,6 +2366,17 @@ export const handleRequest=async (req,res)=>{
     if(url.pathname==='/api/health' || url.pathname==='/api/health/live') return json(res,200,{ok:true,app:'Lykios LMS',version:APP_VERSION,mode:NODE_ENV});
     if(url.pathname==='/api/health/ready'){ try{const db=await readDb(); const sh=await persistence.health(); return json(res,200,{ok:true,version:APP_VERSION,schemaVersion:db.meta?.schemaVersion||null,storage:sh});}catch(e){return json(res,503,{ok:false,error:'storage_unavailable'});} }
     if(url.pathname==='/api/public/catalog' && req.method==='GET'){const db=await readDb();return json(res,200,catalogPayload(db));}
+    if(IS_PREVIEW && url.pathname==='/api/public/video-protection-check' && req.method==='GET'){
+      return json(res,200,{
+        privateStorage:FILE_BACKEND==='blob',
+        signedPlayback:true,
+        signedUrlTtlMinutes:Math.round(VIDEO_TOKEN_TTL_MS/60000),
+        coursePayloadExposesVideoRefs:false,
+        coursePayloadExposesStorageNames:false,
+        enrollmentAndLessonAccessRequired:true,
+        videoSessionRateLimit:'120/15min'
+      });
+    }
     if(IS_PREVIEW && url.pathname==='/api/public/piel-perfecta-transfer-check' && req.method==='GET'){
       const db=await readDb();
       const pkg=buildCourseTransferPackage(db,'piel-perfecta-20');
@@ -2737,6 +2750,7 @@ export const handleRequest=async (req,res)=>{
       }
 
       if(url.pathname==='/api/video/session' && req.method==='POST'){
+        const rl=rateLimit('video-session:'+user.id,120,15*60*1000);if(!rl.ok)return json(res,429,{error:'Demasiadas solicitudes de vídeo. Espera unos minutos.'});
         const body=await readBody(req); const lesson=db.lessons.find(l=>l.id===body.lessonId);
         if(!lesson || !canAccessLesson(db,user,lesson)) return json(res,403,{error:'Sin acceso a esta clase'});
         const videos=lessonVideos(lesson);const selected=body.videoId?videos.find(v=>v.id===body.videoId):videos[0];
@@ -2749,10 +2763,10 @@ export const handleRequest=async (req,res)=>{
           const pathname=ref.slice(5);
           const {issueSignedToken,presignUrl}=await import('@vercel/blob');
           const signedToken=await issueSignedToken({pathname,operations:['get'],validUntil:expiresAt});
-          const signed=await presignUrl(signedToken,{pathname,operation:'get',access:'private',validUntil:expiresAt});
+          const signed=await presignUrl(signedToken,{pathname,operation:'get',access:'private',validUntil:expiresAt,useCache:false});
           streamUrl=signed.presignedUrl;
         }
-        return json(res,200,{token,expiresAt,videoId:selected.id,name:selected.name,streamUrl,progress:videoProgressPayload(db,user,lesson.id,selected.id)});
+        return json(res,200,{expiresAt,videoId:selected.id,name:selected.name,streamUrl,progress:videoProgressPayload(db,user,lesson.id,selected.id),protection:{privateStorage:ref.startsWith('blob:'),expiresAt,downloadUi:false}});
       }
       if(url.pathname==='/api/video/progress' && req.method==='POST'){
         const body=await readBody(req);
