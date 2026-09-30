@@ -273,6 +273,33 @@ async function readDb(){
     });
     db.meta.schemaVersion=18; changed=true;
   }
+  if ((db.meta?.schemaVersion||1) < 19) {
+    const emptyCourseIds=new Set();
+    for(const course of db.courses){
+      const publishedModuleIds=db.modules.filter(m=>m.courseId===course.id&&m.status==='published').map(m=>m.id);
+      const publishedLessons=db.lessons.filter(l=>l.courseId===course.id&&l.status==='published'&&publishedModuleIds.includes(l.moduleId));
+      const publishedLessonIds=publishedLessons.map(l=>l.id);
+      const publishedAssessments=db.assessments.filter(a=>a.status==='published'&&((a.scopeType==='module'&&publishedModuleIds.includes(a.scopeId))||(a.scopeType==='lesson'&&publishedLessonIds.includes(a.scopeId))));
+      if(publishedLessons.length===0&&publishedAssessments.length===0)emptyCourseIds.add(course.id);
+    }
+    for(const cert of db.certificates||[]){
+      if(emptyCourseIds.has(cert.courseId)&&(cert.status||'valid')!=='revoked'){
+        cert.status='revoked';
+        cert.revokedAt=now();
+        cert.revocationReason='Curso sin requisitos publicados';
+        changed=true;
+      }
+    }
+    for(const item of db.emailOutbox||[]){
+      if(emptyCourseIds.has(item.courseId)&&['certificate','course_completed'].includes(item.type)&&['queued','sending'].includes(item.status)){
+        item.status='cancelled';
+        item.cancelledAt=now();
+        item.lastError='Cancelado: curso sin requisitos publicados';
+        changed=true;
+      }
+    }
+    db.meta.schemaVersion=19; changed=true;
+  }
   if (db.meta?.tutorPolicy) { const days=Math.max(0,Number(db.meta.tutorPolicy.retainQueriesDays)||0); if(days>0 && Array.isArray(db.tutorQueries)){ const cutoff=Date.now()-days*86400000; const before=db.tutorQueries.length; db.tutorQueries=db.tutorQueries.filter(q=>new Date(q.createdAt).getTime()>=cutoff); if(db.tutorQueries.length!==before) changed=true; } }
   if(changed) await writeDb(db);
   return db;
@@ -324,7 +351,7 @@ async function seedDb(){
   }
   const adminId = newId();
   const db = {
-    meta:{ schemaVersion:18, createdAt:now(), app:'Lykios LMS', tutorPolicy:{retainQueriesDays:30,storeQuestionText:true,feedbackEnabled:true} },
+    meta:{ schemaVersion:19, createdAt:now(), app:'Lykios LMS', tutorPolicy:{retainQueriesDays:30,storeQuestionText:true,feedbackEnabled:true} },
     users:[
       { id:adminId, email:String(ADMIN_EMAIL).toLowerCase(), firstName:'Lykios', lastName:'Admin', role:'admin', status:'active', lastLoginAt:null, failedLoginCount:0, failedLoginWindowStartedAt:null, loginLockedUntil:null, passwordResetLastSentAt:null, passwordSalt:adminPass.salt, passwordHash:adminPass.hash, createdAt:now() }
     ],
@@ -709,8 +736,9 @@ function courseCompletionStatus(db,user,courseId){
   const completed=new Set(lessons.filter(l=>lessonIsComplete(db,user,enrollment,l)).map(l=>l.id));
   const incompleteLessons=lessons.filter(l=>!completed.has(l.id));
   const assessmentStatus=courseAssessmentStatus(db,user,courseId);
-  const eligible=course.certificateEnabled!==false && incompleteLessons.length===0 && assessmentStatus.allPassed;
-  return {eligible,certificateEnabled:course.certificateEnabled!==false,lessonsTotal:lessons.length,lessonsCompleted:lessons.length-incompleteLessons.length,incompleteLessons:incompleteLessons.map(l=>({id:l.id,code:l.code,title:l.title})),assessmentsRequired:assessmentStatus.required,assessmentsPassed:assessmentStatus.passed,allAssessmentsPassed:assessmentStatus.allPassed};
+  const hasCompletionRequirements=lessons.length>0 || assessmentStatus.required>0;
+  const eligible=course.certificateEnabled!==false && hasCompletionRequirements && incompleteLessons.length===0 && assessmentStatus.allPassed;
+  return {eligible,hasCompletionRequirements,certificateEnabled:course.certificateEnabled!==false,lessonsTotal:lessons.length,lessonsCompleted:lessons.length-incompleteLessons.length,incompleteLessons:incompleteLessons.map(l=>({id:l.id,code:l.code,title:l.title})),assessmentsRequired:assessmentStatus.required,assessmentsPassed:assessmentStatus.passed,allAssessmentsPassed:assessmentStatus.allPassed};
 }
 function certificateCode(){
   const y=new Date().getFullYear();
