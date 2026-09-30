@@ -145,6 +145,190 @@ const SAFE_RESOURCE_MIME = new Set([
 function safeResourceMime(v){ const m=cleanText(v,120).toLowerCase(); return SAFE_RESOURCE_MIME.has(m)?m:null; }
 
 
+const PIEL_PERFECTA_STRUCTURE_VERSION = 1;
+const PIEL_PERFECTA_STRUCTURE = [
+  {
+    code:'M0',
+    title:'Módulo 0 · Bienvenida y punto de partida',
+    description:'Orientación inicial para entender cómo funciona el curso, definir objetivos realistas y registrar el punto de partida antes de cambiar la rutina.',
+    lessons:[
+      {code:'0.1',title:'Bienvenido al curso',summary:'Presentación de Piel Perfecta 2.0 y de su idea central: menos ruido, más criterio. El alumno entiende qué va a aprender y por qué no necesita perseguir tendencias ni rutinas imposibles.',durationMinutes:3,plannedResources:['Guía práctica de inicio · Tu rutina de piel, con criterio']},
+      {code:'0.2',title:'Cómo funciona y qué necesitas',summary:'Explica el recorrido del curso, cómo utilizar vídeos, materiales y ejercicios, y qué hace falta para avanzar. La indicación inicial es clara: empezar con lo que ya se tiene y no comprar por impulso.',durationMinutes:3,plannedResources:['Mapa del curso · 11 módulos y proyecto final']},
+      {code:'0.3',title:'Tu punto de partida',summary:'Autobservación inicial: fotografía de referencia, objetivos realistas, hábitos actuales y compromiso mínimo. Sirve como línea de base para comparar el progreso al final del curso.',durationMinutes:3,plannedResources:['Cuaderno · Mi punto de partida','Ficha · Objetivos y fotografía inicial']}
+    ]
+  },
+  {
+    code:'M1',
+    title:'Módulo 1 · Tu piel por dentro',
+    description:'Bases sencillas para entender cómo funciona la piel y reconocer qué señales merece la pena observar antes de elegir productos.',
+    lessons:[
+      {code:'1.1',title:'La piel por dentro: cómo funciona',summary:'Una explicación accesible de la piel como órgano vivo: sus capas, sus funciones principales y por qué conocer lo básico cambia la forma de cuidarla.',durationMinutes:4,plannedResources:[]},
+      {code:'1.2',title:'La barrera cutánea: la base del equilibrio',summary:'Qué es la barrera cutánea, qué factores pueden alterarla y por qué una rutina eficaz debe protegerla antes de añadir pasos o activos.',durationMinutes:4,plannedResources:[]},
+      {code:'1.3',title:'Aprende a observar las señales de tu piel',summary:'Cómo observar confort, tirantez, brillo, descamación, sensibilidad y cambios sin convertir la observación en un autodiagnóstico médico.',durationMinutes:4,plannedResources:['Mapa de señales de tu piel']}
+    ]
+  },
+  {
+    code:'M2',
+    title:'Módulo 2 · Tipo, estado y necesidades de la piel',
+    description:'Distinguir lo relativamente estable de lo que cambia con el contexto para tomar decisiones más personalizadas y realistas.',
+    lessons:[
+      {code:'2.1',title:'Tipo de piel y estado de la piel',summary:'Diferencia entre tipo de piel, estado actual y necesidades concretas. El objetivo es evitar etiquetas rígidas y entender que la piel puede cambiar.',durationMinutes:4,plannedResources:[]},
+      {code:'2.2',title:'Qué necesita tu piel hoy',summary:'Cómo relacionar las señales observadas con necesidades de limpieza, hidratación, protección o tratamiento, sin asumir que más productos significan mejor cuidado.',durationMinutes:4,plannedResources:[]},
+      {code:'2.3',title:'Tu mapa personal de piel',summary:'Ejercicio práctico para reunir tipo, estado, señales, contexto y objetivos en una ficha sencilla que guiará las decisiones del resto del curso.',durationMinutes:4,plannedResources:['Ficha · Tipo, estado y necesidades','Cuaderno · Observación durante 7 días']}
+    ]
+  },
+  {
+    code:'M3',
+    title:'Módulo 3 · Los tres pilares',
+    description:'Construir una base simple y sostenible alrededor de tres funciones esenciales: limpiar, hidratar y proteger.',
+    lessons:[
+      {code:'3.1',title:'Limpiar sin agredir',summary:'Qué debe conseguir una buena limpieza, cómo adaptar frecuencia y textura y qué señales indican que la piel está quedando demasiado tirante o incómoda.',durationMinutes:4,plannedResources:[]},
+      {code:'3.2',title:'Hidratar con sentido',summary:'Qué significa hidratar, cómo influye la barrera cutánea y por qué la textura y la tolerancia importan tanto como la promesa del producto.',durationMinutes:4,plannedResources:[]},
+      {code:'3.3',title:'Proteger: fotoprotección diaria',summary:'La fotoprotección como tercer pilar de la rutina. Cómo integrarla de forma realista y elegir un formato que pueda utilizarse con constancia.',durationMinutes:4,plannedResources:['Checklist · Limpiar, hidratar y proteger','Plantilla · Rutina mínima mañana y noche']}
+    ]
+  },
+  {
+    code:'M4',
+    title:'Módulo 4 · El arsenal cosmético',
+    description:'Aprender a entender productos, etiquetas y activos para comprar por función y necesidad, no por promesas o tendencias.',
+    lessons:[
+      {code:'4.1',title:'Qué función cumple cada producto',summary:'Ordena el arsenal cosmético por función: limpiar, hidratar, proteger y tratar objetivos concretos. Ayuda a detectar duplicados y pasos innecesarios.',durationMinutes:4,plannedResources:[]},
+      {code:'4.2',title:'Cómo leer una etiqueta sin perderte',summary:'Una forma práctica de leer nombre, función, modo de uso, advertencias y formulación sin perseguir cada ingrediente viral ni convertir la rutina en un examen de química.',durationMinutes:4,plannedResources:['Guía · Cómo leer un cosmético']},
+      {code:'4.3',title:'Activos: menos, pero mejor elegidos',summary:'Qué es un activo cosmético, cómo relacionarlo con un objetivo y por qué conviene introducir cambios de uno en uno para poder evaluar tolerancia y respuesta.',durationMinutes:4,plannedResources:['Ficha · Decisión de compra por función','Checklist · Introducir un producto nuevo']}
+    ]
+  },
+  {
+    code:'M5',
+    title:'Módulo 5 · Belleza desde dentro',
+    description:'Poner la cosmética en contexto: alimentación, hidratación y hábitos diarios que acompañan a la piel sin promesas mágicas.',
+    lessons:[
+      {code:'5.1',title:'Alimentación y piel: lo que sí suma',summary:'Cómo encajar la alimentación dentro del cuidado global de la piel, con expectativas razonables y sin convertir alimentos concretos en tratamientos milagro.',durationMinutes:4,plannedResources:[]},
+      {code:'5.2',title:'Hidratación y hábitos cotidianos',summary:'El papel de la hidratación, la regularidad y otros hábitos sencillos dentro de una estrategia de cuidado sostenible.',durationMinutes:4,plannedResources:[]},
+      {code:'5.3',title:'Construye hábitos que puedas mantener',summary:'Pasar de consejos sueltos a decisiones realistas: escoger pocos hábitos, medir adherencia y ajustar sin buscar perfección.',durationMinutes:4,plannedResources:['Cuaderno · Hábitos que acompañan a tu piel']}
+    ]
+  },
+  {
+    code:'M6',
+    title:'Módulo 6 · Piel y mente',
+    description:'Entender cómo descanso, estrés, movimiento y bienestar pueden acompañar la respuesta de la piel y la constancia de la rutina.',
+    lessons:[
+      {code:'6.1',title:'Estrés y piel: una relación de ida y vuelta',summary:'Cómo el estrés y la percepción de la piel pueden influirse mutuamente y por qué el cuidado debe evitar convertirse en una fuente adicional de presión.',durationMinutes:4,plannedResources:[]},
+      {code:'6.2',title:'Sueño y recuperación',summary:'El descanso como parte del contexto general del cuidado: observar patrones, reducir fricción en la rutina nocturna y priorizar constancia.',durationMinutes:4,plannedResources:[]},
+      {code:'6.3',title:'Movimiento, bienestar y constancia',summary:'Cómo integrar actividad, pausas y autocuidado en una rutina que sea compatible con la vida real y pueda mantenerse en el tiempo.',durationMinutes:4,plannedResources:['Diario · Sueño, estrés, movimiento y piel']}
+    ]
+  },
+  {
+    code:'M7',
+    title:'Módulo 7 · Rituales y sabiduría del mundo',
+    description:'Explorar rituales de cuidado de distintas culturas con mirada crítica para rescatar ideas útiles, seguras y adaptables sin copiar tradiciones a ciegas.',
+    lessons:[
+      {code:'7.1',title:'Cuando el cuidado se convierte en ritual',summary:'El valor del ritual como pausa, disfrute y constancia. Diferencia entre una experiencia agradable y añadir pasos que la piel no necesita.',durationMinutes:4,plannedResources:[]},
+      {code:'7.2',title:'La vuelta al mundo',summary:'Recorrido por rituales de cuidado conocidos en diferentes culturas: qué aportan, qué conviene contextualizar y qué ideas pueden adaptarse con sensatez.',durationMinutes:4,plannedResources:[]},
+      {code:'7.3',title:'Diséñala (y hazla con cabeza)',summary:'Construcción de un ritual personal, breve y seguro que encaje con la rutina, el tiempo disponible y las preferencias del alumno.',durationMinutes:4,plannedResources:['Plantilla · Diseña tu ritual de cuidado']}
+    ]
+  },
+  {
+    code:'M8',
+    title:'Módulo 8 · Maquillaje natural',
+    description:'Utilizar el maquillaje como herramienta para realzar y expresar, no como obligación para esconder la piel.',
+    lessons:[
+      {code:'8.1',title:'Realza, no disfraza',summary:'Una filosofía de maquillaje natural centrada en realzar rasgos y respetar la piel, evitando la idea de que una piel real necesita ser ocultada.',durationMinutes:4,plannedResources:[]},
+      {code:'8.2',title:'Textura, tono y equilibrio',summary:'Decisiones sencillas sobre preparación, base, acabado y equilibrio visual para conseguir un resultado natural sin acumular capas innecesarias.',durationMinutes:4,plannedResources:[]},
+      {code:'8.3',title:'Tu maquillaje en 10 minutos',summary:'Rutina práctica y rápida de maquillaje natural, pensada para ser repetible y compatible con el cuidado previo de la piel.',durationMinutes:4,plannedResources:['Checklist · Maquillaje natural en 10 minutos']}
+    ]
+  },
+  {
+    code:'M9',
+    title:'Módulo 9 · Cuidado en contexto',
+    description:'Adaptar el cuidado cuando cambian el clima, los viajes, la exposición o la sensibilidad sin reconstruir toda la rutina desde cero.',
+    lessons:[
+      {code:'9.1',title:'Tu piel y el clima cambian juntos',summary:'Cómo frío, calor, viento, humedad, sol, aire seco, agua salada o cloro pueden cambiar las prioridades de la rutina.',durationMinutes:4,plannedResources:[]},
+      {code:'9.2',title:'Tu piel viaja contigo',summary:'Cómo mantener la base —limpiar, hidratar y proteger— y ajustar texturas, cantidades y prioridades cuando cambia el entorno.',durationMinutes:4,plannedResources:[]},
+      {code:'9.3',title:'Tu kit inteligente de viaje',summary:'Seleccionar lo realmente necesario para viajar, evitar duplicados y preparar una estrategia sencilla para vuelos, playa, montaña o cambios bruscos de clima.',durationMinutes:4,plannedResources:['Checklist · Kit inteligente de viaje','Ficha · Cómo adaptar tu rutina al clima']}
+    ]
+  },
+  {
+    code:'M10',
+    title:'Módulo 10 · Tu Rutina Maestra',
+    description:'Proyecto final que integra lo aprendido en una rutina personalizada, justificable, realista y flexible.',
+    lessons:[
+      {code:'10.1',title:'El proyecto final: tu Rutina Maestra',summary:'Reunir todas las piezas del curso y convertir conocimientos aislados en decisiones concretas para la propia piel, objetivos y contexto.',durationMinutes:4,plannedResources:[]},
+      {code:'10.2',title:'Constrúyela paso a paso',summary:'Diseñar la rutina de mañana y de noche, elegir funciones y productos, definir frecuencia y prever cómo adaptarla cuando cambien las circunstancias.',durationMinutes:4,plannedResources:['Cuaderno · Tu Rutina Maestra']},
+      {code:'10.3',title:'Evalúala y… ¡enhorabuena!',summary:'Revisar la Rutina Maestra con cuatro criterios: personalización, capacidad de justificar decisiones, integración de aprendizajes y sostenibilidad en la vida real.',durationMinutes:4,plannedResources:['Rúbrica · Evalúa tu Rutina Maestra','Checklist final · Antes y después']}
+    ]
+  }
+];
+
+function ensurePielPerfectaStructure(db){
+  db.meta ||= {};
+  const current=Number(db.meta.pielPerfectaStructureVersion)||0;
+  if(current>=PIEL_PERFECTA_STRUCTURE_VERSION)return {changed:false,reason:'already_current'};
+  const course=db.courses.find(c=>c.slug==='piel-perfecta-20');
+  if(!course)return {changed:false,reason:'course_missing'};
+
+  const t=now();
+  let changed=false;
+  Object.assign(course,{
+    title:'Piel Perfecta 2.0',
+    subtitle:'Entiende tu piel, elige con criterio y construye tu Rutina Maestra',
+    description:'Curso online para público general que transforma el cuidado de la piel en decisiones sencillas, personalizadas y sostenibles. Incluye 11 módulos, materiales descargables, tests de repaso y proyecto final.',
+    status:'draft',
+    certificateEnabled:true,
+    priceCents:3200,
+    currency:'EUR',
+    saleEnabled:false,
+    sequentialAccess:true,
+    updatedAt:t
+  });
+  changed=true;
+
+  for(const [moduleIndex,definition] of PIEL_PERFECTA_STRUCTURE.entries()){
+    let module=db.modules.find(m=>m.courseId===course.id&&m.code===definition.code);
+    if(!module){
+      module={id:newId(),courseId:course.id,code:definition.code,title:definition.title,description:definition.description,position:moduleIndex+1,status:'draft',createdAt:t,updatedAt:t};
+      db.modules.push(module); changed=true;
+    }else{
+      Object.assign(module,{title:definition.title,description:definition.description,position:moduleIndex+1,status:'draft',updatedAt:t}); changed=true;
+    }
+
+    for(const [lessonIndex,definitionLesson] of definition.lessons.entries()){
+      let lesson=db.lessons.find(l=>l.courseId===course.id&&l.code===definitionLesson.code);
+      if(!lesson){
+        lesson={
+          id:newId(),moduleId:module.id,courseId:course.id,code:definitionLesson.code,title:definitionLesson.title,
+          summary:definitionLesson.summary,position:lessonIndex+1,status:'draft',durationMinutes:definitionLesson.durationMinutes||4,
+          video:null,videos:[],resources:[],plannedResources:definitionLesson.plannedResources||[],
+          tutorApproved:false,tutorContent:'',tutorApprovedAt:null,createdAt:t,updatedAt:t
+        };
+        db.lessons.push(lesson); changed=true;
+      }else{
+        lesson.moduleId=module.id;
+        lesson.title=definitionLesson.title;
+        lesson.summary=definitionLesson.summary;
+        lesson.position=lessonIndex+1;
+        lesson.status='draft';
+        lesson.durationMinutes=definitionLesson.durationMinutes||lesson.durationMinutes||4;
+        lesson.plannedResources=definitionLesson.plannedResources||[];
+        lesson.resources ||= [];
+        lesson.videos ||= lesson.video?[{id:lesson.videoId||newId(),ref:lesson.video,name:lesson.videoName||'Vídeo 1',mime:lesson.videoMime||'video/mp4',size:lesson.videoSize||null,position:1,createdAt:lesson.updatedAt||lesson.createdAt||t}]:[];
+        lesson.updatedAt=t;
+        changed=true;
+      }
+    }
+  }
+
+  db.meta.pielPerfectaStructureVersion=PIEL_PERFECTA_STRUCTURE_VERSION;
+  return {
+    changed,
+    courseId:course.id,
+    moduleCount:PIEL_PERFECTA_STRUCTURE.length,
+    lessonCount:PIEL_PERFECTA_STRUCTURE.reduce((n,m)=>n+m.lessons.length,0),
+    status:course.status,
+    saleEnabled:course.saleEnabled
+  };
+}
+
+
 function passwordPolicy(password){
   const value=String(password||'');
   if(value.length<12) return 'La contraseña debe tener al menos 12 caracteres';
@@ -301,6 +485,10 @@ async function readDb(){
     db.meta.schemaVersion=19; changed=true;
   }
   if (db.meta?.tutorPolicy) { const days=Math.max(0,Number(db.meta.tutorPolicy.retainQueriesDays)||0); if(days>0 && Array.isArray(db.tutorQueries)){ const cutoff=Date.now()-days*86400000; const before=db.tutorQueries.length; db.tutorQueries=db.tutorQueries.filter(q=>new Date(q.createdAt).getTime()>=cutoff); if(db.tutorQueries.length!==before) changed=true; } }
+  if(IS_PREVIEW){
+    const pp=ensurePielPerfectaStructure(db);
+    if(pp.changed){changed=true;logEvent('info','piel_perfecta_structure_ready',pp);}
+  }
   if(changed) await writeDb(db);
   return db;
 }
