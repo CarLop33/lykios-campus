@@ -330,7 +330,7 @@ function ensurePielPerfectaStructure(db){
 
 
 
-const PIEL_PERFECTA_EXTRAS_VERSION = 1;
+const PIEL_PERFECTA_EXTRAS_VERSION = 2;
 
 const PIEL_PERFECTA_RESOURCE_BOOKLETS = {
   M0:{name:'Cuaderno 0 - Mi punto de partida.pdf',title:'Mi punto de partida',subtitle:'Piel Perfecta 2.0 - Modulo 0',intro:'Antes de cambiar tu rutina, registra como esta hoy tu piel, que usas y que quieres conseguir. No es un diagnostico medico: es una fotografia inicial para comparar tu progreso.',sections:[
@@ -539,20 +539,37 @@ function ensurePielPerfectaExtras(db){
 
     const questions=PIEL_PERFECTA_TESTS[module.code];
     if(questions?.length){
-      let assessment=assessmentForScope(db,'module',module.id);
-      const shortTitle=module.title.replace(/^Módulo \d+ · /,'');
-      const testTitle='Test '+module.code.replace('M','')+' - '+shortTitle;
-      if(!assessment){
-        assessment={id:newId(),scopeType:'module',scopeId:module.id,title:testTitle,instructions:'5 preguntas sencillas de repaso. Selecciona una sola respuesta en cada pregunta.',passingScore:80,maxAttempts:3,status:'draft',createdAt:t,updatedAt:t};
-        db.assessments.push(assessment);changed=true;
-      }else{
-        assessment.title=testTitle;
-        assessment.instructions='5 preguntas sencillas de repaso. Selecciona una sola respuesta en cada pregunta.';
-        assessment.passingScore=80;assessment.maxAttempts=3;assessment.status='draft';assessment.updatedAt=t;changed=true;
+      const lessons=db.lessons.filter(l=>l.moduleId===module.id).sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0));
+      const target=lessons[lessons.length-1];
+      if(target){
+        const moduleAssessment=assessmentForScope(db,'module',module.id);
+        let assessment=assessmentForScope(db,'lesson',target.id);
+        if(moduleAssessment&&!assessment){
+          moduleAssessment.scopeType='lesson';
+          moduleAssessment.scopeId=target.id;
+          assessment=moduleAssessment;
+          changed=true;
+        }else if(moduleAssessment&&assessment&&moduleAssessment.id!==assessment.id){
+          const doomed=moduleAssessment.id;
+          db.questions=db.questions.filter(q=>q.assessmentId!==doomed);
+          db.attempts=db.attempts.filter(a=>a.assessmentId!==doomed);
+          db.assessments=db.assessments.filter(a=>a.id!==doomed);
+          changed=true;
+        }
+        const shortTitle=module.title.replace(/^Módulo \d+ · /,'');
+        const testTitle='Test '+module.code.replace('M','')+' - '+shortTitle;
+        if(!assessment){
+          assessment={id:newId(),scopeType:'lesson',scopeId:target.id,title:testTitle,instructions:'5 preguntas sencillas de repaso. Selecciona una sola respuesta en cada pregunta.',passingScore:80,maxAttempts:3,status:'draft',createdAt:t,updatedAt:t};
+          db.assessments.push(assessment);changed=true;
+        }else{
+          assessment.scopeType='lesson';assessment.scopeId=target.id;assessment.title=testTitle;
+          assessment.instructions='5 preguntas sencillas de repaso. Selecciona una sola respuesta en cada pregunta.';
+          assessment.passingScore=80;assessment.maxAttempts=3;assessment.status='draft';assessment.updatedAt=t;changed=true;
+        }
+        db.questions=db.questions.filter(q=>q.assessmentId!==assessment.id);
+        questions.forEach((q,i)=>db.questions.push({id:newId(),assessmentId:assessment.id,prompt:q.prompt,type:'single_choice',options:q.options,correctOption:q.correctOption,explanation:q.explanation,position:i+1,createdAt:t,updatedAt:t}));
+        assessmentCount++;questionCount+=questions.length;changed=true;
       }
-      db.questions=db.questions.filter(q=>q.assessmentId!==assessment.id);
-      questions.forEach((q,i)=>db.questions.push({id:newId(),assessmentId:assessment.id,prompt:q.prompt,type:'single_choice',options:q.options,correctOption:q.correctOption,explanation:q.explanation,position:i+1,createdAt:t,updatedAt:t}));
-      assessmentCount++;questionCount+=questions.length;changed=true;
     }
   }
   db.meta.pielPerfectaExtrasVersion=PIEL_PERFECTA_EXTRAS_VERSION;
@@ -1986,8 +2003,8 @@ export const handleRequest=async (req,res)=>{
       if(!course)return json(res,404,{error:'Curso no encontrado'});
       const modules=db.modules.filter(m=>m.courseId===course.id);
       const lessons=db.lessons.filter(l=>l.courseId===course.id);
-      const moduleIds=new Set(modules.map(m=>m.id));
-      const assessments=db.assessments.filter(a=>a.scopeType==='module'&&moduleIds.has(a.scopeId));
+      const lessonIds=new Set(lessons.map(l=>l.id));
+      const assessments=db.assessments.filter(a=>a.scopeType==='lesson'&&lessonIds.has(a.scopeId));
       const assessmentIds=new Set(assessments.map(a=>a.id));
       const resources=lessons.flatMap(l=>(l.resources||[]).filter(r=>r.generatedKey?.startsWith('piel-perfecta:')));
       return json(res,200,{title:course.title,status:course.status,saleEnabled:course.saleEnabled,moduleCount:modules.length,lessonCount:lessons.length,generatedResources:resources.length,assessmentCount:assessments.length,questionCount:db.questions.filter(q=>assessmentIds.has(q.assessmentId)).length,assessmentStatuses:[...new Set(assessments.map(a=>a.status))]});
