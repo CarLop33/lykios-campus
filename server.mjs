@@ -2397,6 +2397,9 @@ async function cleanupSyntheticTestUser(email){
     db.emailOutbox=(db.emailOutbox||[]).filter(e=>e.userId!==user.id);
     db.passwordResetTokens=(db.passwordResetTokens||[]).filter(t=>t.userId!==user.id);
     db.sessions=db.sessions.filter(s=>s.userId!==user.id);
+    db.knownDevices=(db.knownDevices||[]).filter(d=>d.userId!==user.id);
+    db.securityEvents=(db.securityEvents||[]).filter(e=>e.userId!==user.id);
+    db.videoLeases=(db.videoLeases||[]).filter(l=>l.userId!==user.id);
     db.studentNotes=(db.studentNotes||[]).filter(n=>n.userId!==user.id);
     db.tutorQueries=(db.tutorQueries||[]).filter(q=>q.userId!==user.id);
     db.tutorFeedback=(db.tutorFeedback||[]).filter(x=>x.userId!==user.id);
@@ -2530,11 +2533,15 @@ function studentAdminPayload(db,user){
   const certificates=db.certificates.filter(c=>c.userId===user.id).map(c=>({...publicCertificate(db,c),id:c.id,courseId:c.courseId}));
   const orders=db.orders.filter(o=>o.userId===user.id).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).map(o=>{const c=db.courses.find(x=>x.id===o.courseId);return {...o,courseTitle:c?.title||'',totalLabel:money(o.totalCents,o.currency)};});
   const notes=(db.studentNotes||[]).filter(n=>n.userId===user.id).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
-  return {id:user.id,email:user.email,firstName:user.firstName,lastName:user.lastName,role:user.role,status:user.status||'active',createdAt:user.createdAt,lastLoginAt:user.lastLoginAt||null,enrollments,attempts,certificates,orders,notes};
+  const sessions=(db.sessions||[]).filter(x=>x.userId===user.id&&new Date(x.expiresAt)>new Date()).sort((a,b)=>new Date(b.lastSeenAt||b.createdAt)-new Date(a.lastSeenAt||a.createdAt)).map(x=>({id:x.id,deviceLabel:x.deviceLabel||'Sesión',ipLabel:x.ipLabel||'—',source:x.source||'login',createdAt:x.createdAt,lastSeenAt:x.lastSeenAt||x.createdAt,expiresAt:x.expiresAt}));
+  const devices=(db.knownDevices||[]).filter(x=>x.userId===user.id).sort((a,b)=>new Date(b.lastSeenAt)-new Date(a.lastSeenAt)).map(x=>({id:x.id,label:x.label||'Dispositivo',ipLabel:x.lastIpLabel||'—',firstSeenAt:x.firstSeenAt,lastSeenAt:x.lastSeenAt,status:x.status||'known'}));
+  const securityEvents=(db.securityEvents||[]).filter(x=>x.userId===user.id).sort((a,b)=>new Date(b.at)-new Date(a.at)).slice(0,20).map(x=>({id:x.id,type:x.type,label:x.label,score:x.score||0,deviceLabel:x.deviceLabel||null,ipLabel:x.ipLabel||null,at:x.at}));
+  const activePlayback=(db.videoLeases||[]).find(x=>x.userId===user.id&&new Date(x.expiresAt)>new Date())||null;
+  return {id:user.id,email:user.email,firstName:user.firstName,lastName:user.lastName,role:user.role,status:user.status||'active',createdAt:user.createdAt,lastLoginAt:user.lastLoginAt||null,enrollments,attempts,certificates,orders,notes,security:{maxSessions:MAX_STUDENT_SESSIONS,activeSessions:sessions,knownDevices:devices,recentEvents:securityEvents,score1h:recentSecurityScore(db,user.id),activePlayback:activePlayback?{sessionId:activePlayback.sessionId,lessonId:activePlayback.lessonId,videoId:activePlayback.videoId,lastSeenAt:activePlayback.lastSeenAt,expiresAt:activePlayback.expiresAt}:null}};
 }
 
 function studentsAdminPayload(db){
-  return db.users.filter(u=>u.role==='student').map(u=>{const p=studentAdminPayload(db,u);return {...p,activeEnrollments:p.enrollments.filter(e=>e.status==='active').length,avgProgress:p.enrollments.length?Math.round(p.enrollments.reduce((a,e)=>a+e.progressPercent,0)/p.enrollments.length):0};}).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  return db.users.filter(u=>u.role==='student').map(u=>{const p=studentAdminPayload(db,u);const recentAlerts=(p.security?.recentEvents||[]).filter(e=>(Number(e.score)||0)>=3&&Date.now()-new Date(e.at).getTime()<7*86400000).length;return {...p,activeEnrollments:p.enrollments.filter(e=>e.status==='active').length,avgProgress:p.enrollments.length?Math.round(p.enrollments.reduce((a,e)=>a+e.progressPercent,0)/p.enrollments.length):0,activeSessions:p.security?.activeSessions?.length||0,securityAlerts:recentAlerts};}).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
 }
 
 function mime(file){
@@ -2566,7 +2573,12 @@ export const handleRequest=async (req,res)=>{
         coursePayloadExposesVideoRefs:false,
         coursePayloadExposesStorageNames:false,
         enrollmentAndLessonAccessRequired:true,
-        videoSessionRateLimit:'120/15min'
+        videoSessionRateLimit:'120/15min',
+        maxStudentSessions:MAX_STUDENT_SESSIONS,
+        maxConcurrentPlayback:1,
+        deviceIdentity:'random-browser-id-hashed-server-side',
+        preciseGeolocationStored:false,
+        ipDisplay:'masked'
       });
     }
     if(IS_PREVIEW && url.pathname==='/api/public/piel-perfecta-transfer-check' && req.method==='GET'){
@@ -3373,7 +3385,25 @@ export const handleRequest=async (req,res)=>{
         if(studentMatch){
           const student=db.users.find(u=>u.id===studentMatch[1]&&u.role==='student');if(!student)return json(res,404,{error:'Alumno no encontrado'});
           if(req.method==='GET') return json(res,200,{student:studentAdminPayload(db,student)});
-          if(req.method==='PUT'){const body=await readBody(req);student.firstName=cleanText(body.firstName??student.firstName,120);student.lastName=cleanText(body.lastName??student.lastName,120);if(body.email){const email=cleanText(body.email,220).toLowerCase();if(db.users.some(u=>u.id!==student.id&&u.email.toLowerCase()===email))return json(res,409,{error:'Ese email ya existe'});student.email=email;}if(['active','blocked'].includes(body.status))student.status=body.status;if(student.status==='blocked')db.sessions=db.sessions.filter(s=>s.userId!==student.id);await writeDb(db);return json(res,200,{student:studentAdminPayload(db,student)});}
+          if(req.method==='PUT'){const body=await readBody(req);student.firstName=cleanText(body.firstName??student.firstName,120);student.lastName=cleanText(body.lastName??student.lastName,120);if(body.email){const email=cleanText(body.email,220).toLowerCase();if(db.users.some(u=>u.id!==student.id&&u.email.toLowerCase()===email))return json(res,409,{error:'Ese email ya existe'});student.email=email;}if(['active','blocked'].includes(body.status))student.status=body.status;if(student.status==='blocked'){db.sessions=db.sessions.filter(s=>s.userId!==student.id);releaseVideoLease(db,student.id,'*');securityEvent(db,{userId:student.id,type:'admin_sessions_revoked',label:'Sesiones cerradas al bloquear la cuenta',score:0});}await writeDb(db);return json(res,200,{student:studentAdminPayload(db,student)});}
+        }
+        const revokeAllSessionsMatch=url.pathname.match(/^\/api\/admin\/student\/([^/]+)\/sessions\/revoke-all$/);
+        if(revokeAllSessionsMatch&&req.method==='POST'){
+          const student=db.users.find(u=>u.id===revokeAllSessionsMatch[1]&&u.role==='student');if(!student)return json(res,404,{error:'Alumno no encontrado'});
+          const removed=db.sessions.filter(x=>x.userId===student.id).length;
+          db.sessions=db.sessions.filter(x=>x.userId!==student.id);
+          releaseVideoLease(db,student.id,'*');
+          securityEvent(db,{userId:student.id,type:'admin_sessions_revoked',label:'Administración cerró todas las sesiones activas',score:0});
+          await writeDb(db);return json(res,200,{ok:true,removed,student:studentAdminPayload(db,student)});
+        }
+        const revokeSessionMatch=url.pathname.match(/^\/api\/admin\/student\/([^/]+)\/session\/([^/]+)\/revoke$/);
+        if(revokeSessionMatch&&req.method==='POST'){
+          const student=db.users.find(u=>u.id===revokeSessionMatch[1]&&u.role==='student');if(!student)return json(res,404,{error:'Alumno no encontrado'});
+          const session=db.sessions.find(x=>x.id===revokeSessionMatch[2]&&x.userId===student.id);if(!session)return json(res,404,{error:'Sesión no encontrada'});
+          db.sessions=db.sessions.filter(x=>x.id!==session.id);
+          releaseVideoLease(db,student.id,session.id);
+          securityEvent(db,{userId:student.id,type:'admin_session_revoked',label:'Administración cerró una sesión: '+(session.deviceLabel||'dispositivo'),score:0,deviceKey:session.deviceKey,deviceLabel:session.deviceLabel,ipLabel:session.ipLabel});
+          await writeDb(db);return json(res,200,{ok:true,student:studentAdminPayload(db,student)});
         }
         const studentEnrollMatch=url.pathname.match(/^\/api\/admin\/student\/([^/]+)\/enrollment$/);
         if(studentEnrollMatch&&req.method==='POST'){const student=db.users.find(u=>u.id===studentEnrollMatch[1]&&u.role==='student');if(!student)return json(res,404,{error:'Alumno no encontrado'});const body=await readBody(req);const course=db.courses.find(c=>c.id===body.courseId);if(!course)return json(res,404,{error:'Curso no encontrado'});let e=db.enrollments.find(x=>x.userId===student.id&&x.courseId===course.id);if(e){e.status='active';e.enrolledAt=e.enrolledAt||now();}else{e={id:newId(),userId:student.id,courseId:course.id,status:'active',enrolledAt:now(),source:'manual'};db.enrollments.push(e);}db.activity.push({id:newId(),userId:student.id,type:'enrollment_created',label:`Matrícula manual: ${course.title}`,at:now()});await writeDb(db);return json(res,201,{enrollment:e});}
