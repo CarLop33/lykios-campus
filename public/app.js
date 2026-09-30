@@ -111,7 +111,7 @@ function renderPielPerfectaLaunchPanel(){
     +item((r.resources||0)>=11,'Recursos descargables',(r.resources||0)+'/11 recursos')
     +item((r.tutorApproved||0)===33,'Lykios AI Tutor',(r.tutorApproved||0)+'/33 clases aprobadas')
     +item(d.course?.status==='published','Publicación académica',d.course?.status==='published'?'Publicada':'En borrador')
-    +item(d.course?.saleEnabled===true,'Venta',d.course?.saleEnabled?'Habilitada':'Desactivada')
+    +item(env==='production'?d.course?.saleEnabled===true:d.course?.previewSaleEnabled===true,env==='production'?'Venta Production':'Venta de prueba Preview',(env==='production'?d.course?.saleEnabled:d.course?.previewSaleEnabled)?'Habilitada':'Desactivada')
     +'<p class="muted" style="margin:12px 0 0">Entorno: '+esc(env)+' · Stripe '+(l.stripeConfigured?'configurado':'pendiente')+' · Resend '+(l.resendConfigured?'configurado':'pendiente')+'</p>'
     +'<div class="drawer-actions" style="justify-content:flex-start;margin-top:14px">'
       +'<button class="btn-secondary" onclick="exportPielPerfectaTransfer()">↓ Exportar paquete</button>'
