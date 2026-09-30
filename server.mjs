@@ -2359,6 +2359,24 @@ export const handleRequest=async (req,res)=>{
     if(url.pathname==='/api/health' || url.pathname==='/api/health/live') return json(res,200,{ok:true,app:'Lykios LMS',version:APP_VERSION,mode:NODE_ENV});
     if(url.pathname==='/api/health/ready'){ try{const db=await readDb(); const sh=await persistence.health(); return json(res,200,{ok:true,version:APP_VERSION,schemaVersion:db.meta?.schemaVersion||null,storage:sh});}catch(e){return json(res,503,{ok:false,error:'storage_unavailable'});} }
     if(url.pathname==='/api/public/catalog' && req.method==='GET'){const db=await readDb();return json(res,200,catalogPayload(db));}
+    if(IS_PREVIEW && url.pathname==='/api/public/piel-perfecta-transfer-check' && req.method==='GET'){
+      const db=await readDb();
+      const pkg=buildCourseTransferPackage(db,'piel-perfecta-20');
+      if(!pkg)return json(res,404,{error:'Curso no encontrado'});
+      const validation=await validateCourseTransferPackage(db,pkg,{checkBlobs:false});
+      return json(res,200,{
+        format:pkg.format,
+        checksum:pkg.checksum,
+        exportedAt:pkg.exportedAt,
+        manifest:pkg.manifest,
+        sourceReady:pkg.readiness?.ready===true,
+        packageValid:validation.packageValid,
+        counts:validation.counts,
+        issues:validation.issues,
+        storage:{source:pkg.source.storage,current:currentTransferStorageFingerprint(),sameDatabaseInThisEnvironment:validation.storage.sharedDatabase}
+      });
+    }
+
     if(IS_PREVIEW && url.pathname==='/api/public/piel-perfecta-preview-check' && req.method==='GET'){
       const db=await readDb();const course=db.courses.find(c=>c.slug==='piel-perfecta-20');
       if(!course)return json(res,404,{error:'Curso no encontrado'});
@@ -3049,10 +3067,45 @@ export const handleRequest=async (req,res)=>{
               stripeConfigured:Boolean(STRIPE_SECRET_KEY&&STRIPE_WEBHOOK_SECRET),
               resendConfigured:Boolean(RESEND_API_KEY),
               storageBackend:STORAGE_BACKEND,
-              fileBackend:FILE_BACKEND
+              fileBackend:FILE_BACKEND,
+              transferStorage:currentTransferStorageFingerprint()
             }
           });
         }
+
+        if(url.pathname==='/api/admin/course-transfer/export' && req.method==='POST'){
+          const body=await readBody(req);
+          const slug=cleanText(body.slug||'piel-perfecta-20',160);
+          const pkg=buildCourseTransferPackage(db,slug);
+          if(!pkg)return json(res,404,{error:'Curso no encontrado'});
+          logEvent('info','course_transfer_exported',{slug,environment:VERCEL_ENV||NODE_ENV,checksum:pkg.checksum.value,manifest:pkg.manifest,ready:pkg.readiness?.ready===true});
+          return json(res,200,{package:pkg});
+        }
+        if(url.pathname==='/api/admin/course-transfer/validate' && req.method==='POST'){
+          const body=await readBody(req);
+          const validation=await validateCourseTransferPackage(db,body.package,{checkBlobs:body.checkBlobs!==false});
+          return json(res,validation.packageValid?200:409,{validation});
+        }
+        if(url.pathname==='/api/admin/course-transfer/import' && req.method==='POST'){
+          if(!IS_PROD)return json(res,403,{error:'La importación real solo está habilitada en Production'});
+          const body=await readBody(req);
+          if(cleanText(body.confirm,80)!=='IMPORTAR PIEL PERFECTA')return json(res,400,{error:'Confirmación incorrecta'});
+          const validation=await validateCourseTransferPackage(db,body.package,{checkBlobs:true});
+          if(!validation.canImport)return json(res,409,{error:'El paquete no puede importarse de forma segura',validation});
+          const backup=await createCourseTransferBackup(db);
+          const course=await importCourseTransferPackage(db,body.package);
+          await writeDb(db);
+          const fresh=await readDb();
+          const imported=fresh.courses.find(c=>c.id===course.id);
+          const readiness=courseSaleReadiness(fresh,imported,{ignorePublication:true});
+          if(!readiness.ready){
+            logEvent('error','course_transfer_import_validation_failed',{courseId:course.id,backup,readiness});
+            return json(res,500,{error:'La importación terminó pero no superó la validación académica; el curso permanece en borrador y con venta desactivada',backup,readiness});
+          }
+          logEvent('info','course_transfer_imported',{courseId:course.id,slug:course.slug,backup,readiness});
+          return json(res,201,{ok:true,course:{id:course.id,slug:course.slug,title:course.title,status:'draft',saleEnabled:false},backup,readiness});
+        }
+
         if(url.pathname==='/api/admin/students' && req.method==='GET') return json(res,200,{students:studentsAdminPayload(db),courses:db.courses.map(c=>({id:c.id,title:c.title,slug:c.slug,status:c.status}))});
         const studentMatch=url.pathname.match(/^\/api\/admin\/student\/([^/]+)$/);
         if(studentMatch){
