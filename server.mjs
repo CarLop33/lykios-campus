@@ -912,6 +912,21 @@ async function readDb(){
     }
     db.meta.schemaVersion=19; changed=true;
   }
+  if ((db.meta?.schemaVersion||1) < 20) {
+    db.knownDevices ||= [];
+    db.securityEvents ||= [];
+    db.videoLeases ||= [];
+    db.sessions=(db.sessions||[]).map(row=>({
+      ...row,
+      deviceKey:row.deviceKey||null,
+      deviceLabel:row.deviceLabel||'Sesión anterior',
+      ipHash:row.ipHash||null,
+      ipLabel:row.ipLabel||null,
+      source:row.source||'legacy',
+      lastSeenAt:row.lastSeenAt||row.createdAt||now()
+    }));
+    db.meta.schemaVersion=20; changed=true;
+  }
   if (db.meta?.tutorPolicy) { const days=Math.max(0,Number(db.meta.tutorPolicy.retainQueriesDays)||0); if(days>0 && Array.isArray(db.tutorQueries)){ const cutoff=Date.now()-days*86400000; const before=db.tutorQueries.length; db.tutorQueries=db.tutorQueries.filter(q=>new Date(q.createdAt).getTime()>=cutoff); if(db.tutorQueries.length!==before) changed=true; } }
   if(IS_PREVIEW){
     const pp=ensurePielPerfectaStructure(db);
@@ -1657,6 +1672,8 @@ function mailTemplate(type,ctx={}){
   const courseSlug=cleanText(ctx.courseSlug||'',160);
   const courseUrl=courseSlug?`${campusUrl}/course?slug=${encodeURIComponent(courseSlug)}`:campusUrl;
   const certificateUrl=courseSlug?`${courseUrl}#certificate`:campusUrl;
+  const deviceLabel=emailEscape(cleanText(ctx.deviceLabel||'Nuevo dispositivo',120));
+  const ipLabel=emailEscape(cleanText(ctx.ipLabel||'red no identificada',100));
   const templates={
     welcome:{
       subject:'Bienvenido a Lykios Academy',
@@ -1709,6 +1726,28 @@ function mailTemplate(type,ctx={}){
         ctaUrl:certificateUrl
       })
     },
+    new_device:{
+      subject:'Nuevo acceso a tu cuenta de Lykios Academy',
+      html:emailShell({
+        preheader:'Hemos detectado un acceso desde un dispositivo nuevo.',
+        title:'Nuevo dispositivo detectado',
+        body:`<p style="margin:0 0 16px 0;">Hola <strong>${firstName}</strong>,</p><p style="margin:0 0 16px 0;">Se ha iniciado sesión en tu cuenta desde <strong>${deviceLabel}</strong>.</p><p style="margin:0 0 16px 0;">Red aproximada: <strong>${ipLabel}</strong>.</p><p style="margin:0;">Si has sido tú, no necesitas hacer nada. Si no reconoces este acceso, cambia tu contraseña cuanto antes.</p>`,
+        ctaLabel:'Revisar mi cuenta',
+        ctaUrl:campusUrl,
+        footerNote:'Lykios Academy no almacena ubicación precisa para esta alerta.'
+      })
+    },
+    security_alert:{
+      subject:'Aviso de seguridad · Lykios Academy',
+      html:emailShell({
+        preheader:'Hemos protegido tu cuenta tras detectar actividad inusual.',
+        title:'Actividad inusual detectada',
+        body:`<p style="margin:0 0 16px 0;">Hola <strong>${firstName}</strong>,</p><p style="margin:0 0 16px 0;">El Campus ha detectado un patrón de acceso poco habitual asociado a <strong>${deviceLabel}</strong> y ha cerrado otras sesiones por seguridad.</p><p style="margin:0 0 16px 0;">Red aproximada: <strong>${ipLabel}</strong>.</p><p style="margin:0;">Si reconoces la actividad puedes continuar normalmente. Si no, cambia tu contraseña.</p>`,
+        ctaLabel:'Entrar al Campus',
+        ctaUrl:campusUrl,
+        footerNote:'Esta medida protege el acceso personal a tus cursos.'
+      })
+    },
     reminder:{
       subject:`Continúa tu formación · ${cleanText(ctx.courseTitle||'',220)}`,
       html:emailShell({
@@ -1730,7 +1769,7 @@ function queueEmail(db,{to,type,userId=null,courseId=null,meta={}}){
   if(!to) return null;
   const user=userId?db.users.find(u=>u.id===userId):null;
   const course=courseId?db.courses.find(c=>c.id===courseId):null;
-  const tpl=mailTemplate(type,{firstName:user?.firstName||meta.firstName,courseTitle:course?.title||meta.courseTitle,courseSlug:course?.slug||meta.courseSlug,orderNumber:meta.orderNumber,certificateCode:meta.certificateCode,resetUrl:meta.resetUrl,campusUrl:PUBLIC_APP_ORIGIN});
+  const tpl=mailTemplate(type,{...meta,firstName:user?.firstName||meta.firstName,courseTitle:course?.title||meta.courseTitle,courseSlug:course?.slug||meta.courseSlug,orderNumber:meta.orderNumber,certificateCode:meta.certificateCode,resetUrl:meta.resetUrl,campusUrl:PUBLIC_APP_ORIGIN});
   const item={id:newId(),to:cleanText(to,220).toLowerCase(),type,subject:tpl.subject,html:tpl.html,status:'queued',provider:'resend',userId,courseId,meta,createdAt:now(),sentAt:null,attempts:0,lastError:null,providerRequestId:null};
   db.emailOutbox ||= []; db.emailOutbox.push(item); return item;
 }
