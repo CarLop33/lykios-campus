@@ -2594,29 +2594,49 @@ export const handleRequest=async (req,res)=>{
     if(IS_PREVIEW && url.pathname==='/api/public/blob-usage-check' && req.method==='GET'){
       if(FILE_BACKEND!=='blob')return json(res,200,{blob:false,fileBackend:FILE_BACKEND});
       try{
-        const {list}=await import('@vercel/blob');
+        const db=await readDb();
+        const referenced=new Set();
+        const pielVideoRefs=new Set();
+        for(const lesson of db.lessons||[]){
+          for(const v of lessonVideos(lesson)){
+            const ref=String(v.ref||'');
+            if(ref.startsWith('blob:')){
+              const pathname=ref.slice(5);
+              referenced.add(pathname);
+              if(lesson.courseId===db.courses.find(c=>c.slug==='piel-perfecta-20')?.id)pielVideoRefs.add(pathname);
+            }
+          }
+          for(const r of lesson.resources||[])if(r.storageName)referenced.add(String(r.storageName));
+        }
         let cursor,hasMore=true,totalBytes=0,totalFiles=0,pages=0;
+        let referencedBytes=0,referencedFiles=0,orphanBytes=0,orphanFiles=0,pielBytes=0,pielFiles=0;
         const categories={videos:{files:0,bytes:0},backups:{files:0,bytes:0},other:{files:0,bytes:0}};
         while(hasMore&&pages<100){
           const page=await list({cursor,limit:1000});
           pages++;
           for(const blob of page.blobs||[]){
             const size=Math.max(0,Number(blob.size)||0);
-            totalFiles++;totalBytes+=size;
             const p=String(blob.pathname||'');
+            totalFiles++;totalBytes+=size;
             const bucket=p.startsWith('videos/')?'videos':p.startsWith('backups/')?'backups':'other';
             categories[bucket].files++;categories[bucket].bytes+=size;
+            if(referenced.has(p)){referencedFiles++;referencedBytes+=size}else{orphanFiles++;orphanBytes+=size}
+            if(pielVideoRefs.has(p)){pielFiles++;pielBytes+=size}
           }
           hasMore=Boolean(page.hasMore&&page.cursor);
           cursor=page.cursor;
         }
+        const fmt=v=>({bytes:v,GB:Number((v/1000000000).toFixed(3)),GiB:Number((v/1073741824).toFixed(3))});
         return json(res,200,{
           blob:true,
           privateStore:true,
-          totalFiles,totalBytes,
-          totalGiB:Number((totalBytes/1073741824).toFixed(3)),
-          totalGB:Number((totalBytes/1000000000).toFixed(3)),
-          categories:Object.fromEntries(Object.entries(categories).map(([k,v])=>[k,{files:v.files,bytes:v.bytes,GiB:Number((v.bytes/1073741824).toFixed(3))}])),
+          totalFiles,...fmt(totalBytes),
+          categories:Object.fromEntries(Object.entries(categories).map(([k,v])=>[k,{files:v.files,...fmt(v.bytes)}])),
+          references:{
+            referenced:{files:referencedFiles,...fmt(referencedBytes)},
+            orphaned:{files:orphanFiles,...fmt(orphanBytes)},
+            pielPerfectaVideos:{files:pielFiles,...fmt(pielBytes)}
+          },
           pages,
           truncated:hasMore
         });
