@@ -1712,8 +1712,33 @@ function courseHasPublishedContent(db,courseId){
   const publishedModuleIds=db.modules.filter(m=>m.courseId===courseId&&m.status==='published').map(m=>m.id);
   return db.lessons.some(l=>l.courseId===courseId&&l.status==='published'&&publishedModuleIds.includes(l.moduleId));
 }
+function courseSaleReadiness(db,course){
+  if(!course)return {ready:false,reasons:['Curso no encontrado']};
+  if(course.slug!=='piel-perfecta-20')return {ready:courseHasPublishedContent(db,course.id),reasons:courseHasPublishedContent(db,course.id)?[]:['No hay contenido publicado']};
+  const modules=db.modules.filter(m=>m.courseId===course.id);
+  const lessons=db.lessons.filter(l=>l.courseId===course.id);
+  const lessonIds=new Set(lessons.map(l=>l.id));
+  const assessments=db.assessments.filter(a=>a.scopeType==='lesson'&&lessonIds.has(a.scopeId));
+  const assessmentIds=new Set(assessments.map(a=>a.id));
+  const generatedResources=lessons.flatMap(l=>(l.resources||[]).filter(r=>r.generatedKey?.startsWith('piel-perfecta:')));
+  const reasons=[];
+  if(modules.length!==11)reasons.push('La estructura debe tener 11 módulos');
+  if(lessons.length!==33)reasons.push('La estructura debe tener 33 clases');
+  if(modules.some(m=>m.status!=='published'))reasons.push('Todos los módulos deben estar publicados');
+  if(lessons.some(l=>l.status!=='published'))reasons.push('Todas las clases deben estar publicadas');
+  const lessonsWithoutVideo=lessons.filter(l=>lessonVideos(l).length===0);
+  if(lessonsWithoutVideo.length)reasons.push('Faltan vídeos en '+lessonsWithoutVideo.length+' clases');
+  if(generatedResources.length<11)reasons.push('Faltan recursos descargables');
+  if(assessments.length!==10)reasons.push('Deben existir 9 tests y el proyecto final');
+  if(assessments.some(a=>a.status!=='published'))reasons.push('Todas las evaluaciones deben estar publicadas');
+  const qCount=db.questions.filter(q=>assessmentIds.has(q.assessmentId)).length;
+  if(qCount!==50)reasons.push('Las evaluaciones deben sumar 50 preguntas/criterios');
+  if(lessons.some(l=>l.tutorApproved!==true||!String(l.tutorContent||'').trim()))reasons.push('El tutor debe estar aprobado en las 33 clases');
+  if(course.sequentialAccess!==true)reasons.push('El acceso secuencial debe estar activado');
+  return {ready:reasons.length===0,reasons,modules:modules.length,lessons:lessons.length,lessonsWithVideo:lessons.length-lessonsWithoutVideo.length,assessments:assessments.length,questions:qCount,resources:generatedResources.length,tutorApproved:lessons.filter(l=>l.tutorApproved===true&&String(l.tutorContent||'').trim()).length};
+}
 function catalogPayload(db){
-  const courses=db.courses.filter(c=>c.status==='published'&&c.saleEnabled!==false&&courseHasPublishedContent(db,c.id)).map(c=>{const pr=pricingFor(db,'course',c);return {type:'course',id:c.id,slug:c.slug,title:c.title,subtitle:c.subtitle||'',description:c.description||'',priceCents:pr.finalCents,basePriceCents:pr.baseCents,currency:c.currency||'EUR',priceLabel:money(pr.finalCents,c.currency||'EUR'),basePriceLabel:money(pr.baseCents,c.currency||'EUR'),promotion:pr.promo?{id:pr.promo.id,name:pr.promo.name,badge:pr.promo.badge||'Oferta'}:null};});
+  const courses=db.courses.filter(c=>c.status==='published'&&c.saleEnabled!==false&&courseSaleReadiness(db,c).ready).map(c=>{const pr=pricingFor(db,'course',c);return {type:'course',id:c.id,slug:c.slug,title:c.title,subtitle:c.subtitle||'',description:c.description||'',priceCents:pr.finalCents,basePriceCents:pr.baseCents,currency:c.currency||'EUR',priceLabel:money(pr.finalCents,c.currency||'EUR'),basePriceLabel:money(pr.baseCents,c.currency||'EUR'),promotion:pr.promo?{id:pr.promo.id,name:pr.promo.name,badge:pr.promo.badge||'Oferta'}:null};});
   const bundles=(db.bundles||[]).filter(b=>b.status==='published'&&b.saleEnabled!==false).map(b=>{const pr=pricingFor(db,'bundle',b);const cs=bundleCourses(db,b);return {type:'bundle',id:b.id,slug:b.slug,title:b.title,subtitle:b.subtitle||'',description:b.description||'',courseIds:b.courseIds||[],courseTitles:cs.map(c=>c.title),priceCents:pr.finalCents,basePriceCents:pr.baseCents,currency:b.currency||'EUR',priceLabel:money(pr.finalCents,b.currency||'EUR'),basePriceLabel:money(pr.baseCents,b.currency||'EUR'),promotion:pr.promo?{id:pr.promo.id,name:pr.promo.name,badge:pr.promo.badge||'Oferta'}:null};});
   return {courses,bundles,checkoutProvider:PAYMENT_PROVIDER==='stripe'?'stripe':'mock'};
 }
@@ -1735,6 +1760,10 @@ function checkoutMock(db,body,{suppressEmails=false}={}){
     ?(db.bundles||[]).find(b=>b.slug===cleanText(body.itemSlug||body.bundleSlug,120)&&b.status==='published'&&b.saleEnabled!==false)
     :db.courses.find(c=>c.slug===cleanText(body.itemSlug||body.courseSlug,120)&&c.status==='published'&&c.saleEnabled!==false);
   if(!target) return {error:itemType==='bundle'?'Pack no disponible':'Curso no disponible para compra',status:404};
+  if(itemType==='course'){
+    const readiness=courseSaleReadiness(db,target);
+    if(!readiness.ready)return {error:'Curso todavía no disponible para compra: '+readiness.reasons.join(' · '),status:409};
+  }
   const email=cleanText(body.email,220).toLowerCase(); const firstName=cleanText(body.firstName,120); const lastName=cleanText(body.lastName,120); const password=String(body.password||'');
   if(!email||!email.includes('@')||!firstName) return {error:'Completa nombre y email',status:400};
   let user=db.users.find(u=>u.email.toLowerCase()===email);
@@ -2032,7 +2061,8 @@ export const handleRequest=async (req,res)=>{
       const assessmentIds=new Set(assessments.map(a=>a.id));
       const resources=lessons.flatMap(l=>(l.resources||[]).filter(r=>r.generatedKey?.startsWith('piel-perfecta:')));
       const finalProject=assessments.find(a=>a.title==='Proyecto final · Tu Rutina Maestra')||null;
-      return json(res,200,{title:course.title,status:course.status,saleEnabled:course.saleEnabled,sequentialAccess:course.sequentialAccess===true,moduleCount:modules.length,lessonCount:lessons.length,generatedResources:resources.length,assessmentCount:assessments.length,questionCount:db.questions.filter(q=>assessmentIds.has(q.assessmentId)).length,assessmentStatuses:[...new Set(assessments.map(a=>a.status))],finalProject:finalProject?{status:finalProject.status,passingScore:finalProject.passingScore,maxAttempts:finalProject.maxAttempts,questionCount:db.questions.filter(q=>q.assessmentId===finalProject.id).length}:null,tutorApprovedLessons:lessons.filter(l=>l.tutorApproved===true&&String(l.tutorContent||'').trim().length>0).length});
+      const saleReadiness=courseSaleReadiness(db,course);
+      return json(res,200,{title:course.title,status:course.status,saleEnabled:course.saleEnabled,sequentialAccess:course.sequentialAccess===true,moduleCount:modules.length,lessonCount:lessons.length,generatedResources:resources.length,assessmentCount:assessments.length,questionCount:db.questions.filter(q=>assessmentIds.has(q.assessmentId)).length,assessmentStatuses:[...new Set(assessments.map(a=>a.status))],finalProject:finalProject?{status:finalProject.status,passingScore:finalProject.passingScore,maxAttempts:finalProject.maxAttempts,questionCount:db.questions.filter(q=>q.assessmentId===finalProject.id).length}:null,tutorApprovedLessons:lessons.filter(l=>l.tutorApproved===true&&String(l.tutorContent||'').trim().length>0).length,saleReadiness});
     }
     if(url.pathname==='/api/checkout/create' && req.method==='POST'){
       if(PAYMENT_PROVIDER!=='stripe'&&IS_PROD)return json(res,503,{error:'Pasarela de pago no configurada'});
