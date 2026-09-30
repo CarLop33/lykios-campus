@@ -222,7 +222,7 @@ function createManagedSession(db,user,{req=null,context=null,source='login',noti
 function releaseVideoLease(db,userId,sessionId){
   db.videoLeases ||= [];
   const before=db.videoLeases.length;
-  db.videoLeases=db.videoLeases.filter(l=>!(l.userId===userId&&l.sessionId===sessionId));
+  db.videoLeases=db.videoLeases.filter(l=>!(l.userId===userId&&(sessionId==='*'||l.sessionId===sessionId)));
   return before!==db.videoLeases.length;
 }
 function acquireVideoLease(db,user,session,{lessonId,videoId,reserveMs=VIDEO_LEASE_TTL_MS}={}){
@@ -1032,10 +1032,7 @@ async function readBody(req){
 }
 
 async function auth(req, db){
-  const sid = parseCookies(req).lykios_session;
-  if(!sid) return null;
-  const sidHash=sessionTokenHash(sid);
-  const session = db.sessions.find(s=>(s.tokenHash===sidHash||s.token===sid) && new Date(s.expiresAt)>new Date());
+  const session=currentSession(req,db);
   if(!session) return null;
   const user=db.users.find(u=>u.id===session.userId) || null;
   if(user && (user.status||'active')!=='active' && user.role!=='admin') return null;
@@ -2740,6 +2737,14 @@ export const handleRequest=async (req,res)=>{
         if(!user || !verifyPassword(password,user.passwordSalt,user.passwordHash)){
           if(user){
             recordFailedLogin(user);
+            const ctx=requestSecurityContext(req);
+            if(Number(user.failedLoginCount)===4){
+              securityEvent(db,{userId:user.id,type:'failed_login_burst',label:'Varios intentos de acceso fallidos',score:3,deviceKey:ctx.deviceKey,deviceLabel:ctx.deviceLabel,ipLabel:ctx.ipLabel,dedupeMinutes:30});
+            }
+            if(Number(user.failedLoginCount)>=8){
+              const event=securityEvent(db,{userId:user.id,type:'login_lockout',label:'Cuenta protegida temporalmente tras múltiples intentos fallidos',score:5,deviceKey:ctx.deviceKey,deviceLabel:ctx.deviceLabel,ipLabel:ctx.ipLabel,dedupeMinutes:60});
+              if(event){queueEmail(db,{to:user.email,type:'security_alert',userId:user.id,meta:{deviceLabel:ctx.deviceLabel,ipLabel:ctx.ipLabel}});markLocalEmailsSent(db);}
+            }
             try{await writeDb(db);}
             catch(err){if(err?.code==='STORAGE_CONFLICT'&&attempt<2)continue;throw err;}
           }
@@ -2747,12 +2752,11 @@ export const handleRequest=async (req,res)=>{
         }
         if((user.status||'active')!=='active' && user.role!=='admin') return json(res,403,{error:'Cuenta bloqueada. Contacta con Lykios Academy.'});
         clearFailedLogin(user);db.sessions=db.sessions.filter(s=>new Date(s.expiresAt)>new Date());
-        const token=crypto.randomBytes(32).toString('base64url');
+        const managed=createManagedSession(db,user,{req,source:'login',notifyNewDevice:true});
         user.lastLoginAt=now();
-        db.sessions.push({id:newId(),tokenHash:sessionTokenHash(token),userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+SESSION_TTL_MS).toISOString()});
         try{
           await writeDb(db);
-          return json(res,200,{user:{id:user.id,email:user.email,firstName:user.firstName,lastName:user.lastName,role:user.role,status:user.status||'active'}},{'set-cookie':sessionCookie(token)});
+          return json(res,200,{user:{id:user.id,email:user.email,firstName:user.firstName,lastName:user.lastName,role:user.role,status:user.status||'active'},session:{maxActive:user.role==='student'?MAX_STUDENT_SESSIONS:null,deviceLabel:managed.session.deviceLabel}},{'set-cookie':sessionCookie(managed.token)});
         }catch(err){
           if(err?.code==='STORAGE_CONFLICT'&&attempt<2)continue;
           throw err;
@@ -2831,9 +2835,10 @@ export const handleRequest=async (req,res)=>{
         if(verifyPassword(newPassword,user.passwordSalt,user.passwordHash))return json(res,400,{error:'La nueva contraseña debe ser diferente de la actual'});
         const hp=hashPassword(newPassword);user.passwordSalt=hp.salt;user.passwordHash=hp.hash;clearFailedLogin(user);
         db.sessions=db.sessions.filter(s=>s.userId!==user.id);
-        const token=crypto.randomBytes(32).toString('base64url');db.sessions.push({id:newId(),tokenHash:sessionTokenHash(token),userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+SESSION_TTL_MS).toISOString()});
+        releaseVideoLease(db,user.id,'*');
+        const managed=createManagedSession(db,user,{req,source:'password_change',notifyNewDevice:false});
         db.activity.push({id:newId(),userId:user.id,type:'password_changed',label:'Contraseña actualizada',at:now()});
-        await writeDb(db);return json(res,200,{ok:true},{'set-cookie':sessionCookie(token)});
+        await writeDb(db);return json(res,200,{ok:true},{'set-cookie':sessionCookie(managed.token)});
       }
       if(url.pathname==='/api/dashboard'){
         const enrollments=db.enrollments.filter(e=>e.userId===user.id&&e.status==='active');
