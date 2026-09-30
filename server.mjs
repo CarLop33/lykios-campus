@@ -329,6 +329,236 @@ function ensurePielPerfectaStructure(db){
 }
 
 
+
+const PIEL_PERFECTA_EXTRAS_VERSION = 1;
+
+const PIEL_PERFECTA_RESOURCE_BOOKLETS = {
+  M0:{name:'Cuaderno 0 - Mi punto de partida.pdf',title:'Mi punto de partida',subtitle:'Piel Perfecta 2.0 - Modulo 0',intro:'Antes de cambiar tu rutina, registra como esta hoy tu piel, que usas y que quieres conseguir. No es un diagnostico medico: es una fotografia inicial para comparar tu progreso.',sections:[
+    {heading:'1. Inventario actual',prompts:['¿Que productos utilizas por la mañana?','¿Que productos utilizas por la noche?','¿Hay productos que has comprado pero casi nunca utilizas?']},
+    {heading:'2. Señales que observas',prompts:['¿Como se siente tu piel despues de limpiar?','¿Notas brillo, tirantez, descamacion, sensibilidad o cambios segun el dia?','¿Que situaciones parecen modificarla: clima, descanso, estres, ciclo, viajes?']},
+    {heading:'3. Tus objetivos',prompts:['Escribe dos objetivos realistas para las proximas semanas.','Define un compromiso minimo que puedas mantener incluso en dias complicados.']},
+    {heading:'4. Foto inicial',prompts:['Haz una fotografia con luz natural, sin filtros y, si es posible, sin maquillaje. Anota la fecha para compararla al final.']}
+  ]},
+  M1:{name:'Cuaderno 1 - Mapa de senales de tu piel.pdf',title:'Mapa de señales de tu piel',subtitle:'Piel Perfecta 2.0 - Modulo 1',intro:'La piel da informacion a traves de sensaciones y cambios visibles. Observa sin intentar etiquetar ni diagnosticar enfermedades.',sections:[
+    {heading:'Confort',prompts:['¿Tu piel queda comoda despues de la limpieza?','¿Hay tirantez, picor o escozor repetido?']},
+    {heading:'Aspecto',prompts:['¿Donde aparece brillo?','¿Hay zonas secas o descamacion?','¿Notas enrojecimiento o sensibilidad?']},
+    {heading:'Contexto',prompts:['¿Que producto utilizaste antes del cambio?','¿Como estaban el clima, el descanso y el estres?']},
+    {heading:'Regla de seguridad',prompts:['Si aparece dolor, hinchazon, ampollas, dificultad respiratoria o empeoramiento persistente, suspende el producto y busca valoracion sanitaria.']}
+  ]},
+  M2:{name:'Cuaderno 2 - Tipo estado y necesidades.pdf',title:'Tipo, estado y necesidades',subtitle:'Piel Perfecta 2.0 - Modulo 2',intro:'Separa lo relativamente estable de lo que puede cambiar. Tu rutina debe responder a la piel que tienes hoy, no solo a una etiqueta.',sections:[
+    {heading:'Tipo de piel orientativo',prompts:['¿Tiende a sentirse seca, grasa, mixta o equilibrada?','¿En que zonas cambia mas?']},
+    {heading:'Estado actual',prompts:['¿Esta mas sensible, deshidratada, reactiva, congestionada o estable que de costumbre?','¿Desde cuando?']},
+    {heading:'Necesidades prioritarias',prompts:['Elige como maximo tres prioridades: limpiar, hidratar, proteger o tratar un objetivo concreto.','¿Cual es la prioridad numero uno esta semana?']},
+    {heading:'Observacion durante 7 dias',prompts:['Registra una vez al dia sensacion, productos usados, contexto y respuesta. Busca patrones, no perfeccion.']}
+  ]},
+  M3:{name:'Cuaderno 3 - Rutina minima AM PM.pdf',title:'Rutina minima AM / PM',subtitle:'Piel Perfecta 2.0 - Modulo 3',intro:'Construye primero una base sencilla. Una rutina corta que utilizas con constancia suele aportar mas informacion que una rutina larga que cambia cada semana.',sections:[
+    {heading:'Mañana',prompts:['1. Limpieza: ¿la necesitas y que producto toleras?','2. Hidratacion: ¿que textura te resulta comoda?','3. Proteccion: ¿que protector puedes usar y reaplicar?']},
+    {heading:'Noche',prompts:['1. Limpieza: ¿retira bien protector y maquillaje?','2. Tratamiento opcional: un objetivo cada vez.','3. Hidratacion: ¿como queda la piel al finalizar?']},
+    {heading:'Señales de ajuste',prompts:['¿Aparece tirantez, escozor, pesadez o sequedad persistente?','¿Que unico cambio probaras primero?']}
+  ]},
+  M4:{name:'Cuaderno 4 - Elegir cosmeticos con criterio.pdf',title:'Elegir cosméticos con criterio',subtitle:'Piel Perfecta 2.0 - Modulo 4',intro:'Compra por funcion y necesidad. Una buena decision empieza entendiendo para que sirve un producto, como se usa y como vas a evaluar si encaja contigo.',sections:[
+    {heading:'Lee la etiqueta',prompts:['Producto y marca:','Funcion principal:','Modo de uso y frecuencia indicada:','Advertencias o precauciones:']},
+    {heading:'Antes de comprar',prompts:['¿Ya tienes otro producto que cumple la misma funcion?','¿Encaja en tu presupuesto y en tu rutina real?','¿Sabes cuando y como lo vas a probar?']},
+    {heading:'Activos',prompts:['¿Que objetivo concreto buscas?','Introduce un cambio cada vez y registra tolerancia y respuesta.']},
+    {heading:'Ficha de decision',prompts:['Producto:','Funcion:','Como lo probare:','Que señal observable usare para decidir si me va bien:']}
+  ]},
+  M5:{name:'Cuaderno 5 - Habitos que acompanan a tu piel.pdf',title:'Hábitos que acompañan a tu piel',subtitle:'Piel Perfecta 2.0 - Modulo 5',intro:'La cosmética es una parte del cuidado. Alimentacion, hidratacion y regularidad pueden acompañar a la piel, pero no sustituyen tratamientos ni justifican promesas milagro.',sections:[
+    {heading:'Alimentacion',prompts:['¿Tu alimentacion es variada y sostenible?','¿Que pequeño cambio realista puedes mantener esta semana?']},
+    {heading:'Hidratacion',prompts:['¿Bebes de forma regular a lo largo del dia?','¿Hay momentos en los que sueles olvidarte?']},
+    {heading:'Constancia',prompts:['Elige dos habitos que quieras mantener durante 14 dias.','¿Como los haras faciles de recordar?']},
+    {heading:'Revision',prompts:['¿Que cambio fue facil?','¿Que cambio genero friccion y como puedes simplificarlo?']}
+  ]},
+  M6:{name:'Cuaderno 6 - Sueno estres movimiento y piel.pdf',title:'Sueño, estrés, movimiento y piel',subtitle:'Piel Perfecta 2.0 - Modulo 6',intro:'No se trata de controlar cada variable, sino de observar si descanso, estres y actividad cambian tu bienestar, tu adherencia a la rutina o como percibes tu piel.',sections:[
+    {heading:'Registro breve',prompts:['Horas y calidad de sueño:','Nivel de estres percibido 0-10:','Movimiento o actividad del dia:','Como se sintio tu piel:']},
+    {heading:'Patrones',prompts:['¿Hay dias en que abandonas la rutina por cansancio?','¿Que paso podrias simplificar para mantener lo esencial?']},
+    {heading:'Plan realista',prompts:['Define una rutina nocturna minima para dias normales.','Define una version de emergencia para dias muy cansados.']}
+  ]},
+  M7:{name:'Cuaderno 7 - Disena tu ritual de cuidado.pdf',title:'Diseña tu ritual de cuidado',subtitle:'Piel Perfecta 2.0 - Modulo 7',intro:'Un ritual puede convertir el cuidado en una pausa agradable. La clave es que aporte bienestar sin añadir pasos innecesarios ni practicas agresivas.',sections:[
+    {heading:'Lo que quieres sentir',prompts:['¿Buscas calma, energia, orden, disfrute o simplemente unos minutos para ti?']},
+    {heading:'Tus elementos',prompts:['Elige un momento del dia.','Elige como maximo tres pasos de cuidado.','Añade un elemento no cosmetico si te ayuda: musica, respiracion, luz o silencio.']},
+    {heading:'Filtro de sensatez',prompts:['¿Cada paso tiene una funcion o un motivo claro?','¿Hay algo que irrite, friccione o complique la rutina?','¿Podrias mantenerlo tres veces por semana?']}
+  ]},
+  M8:{name:'Cuaderno 8 - Maquillaje natural en 10 minutos.pdf',title:'Maquillaje natural en 10 minutos',subtitle:'Piel Perfecta 2.0 - Modulo 8',intro:'El objetivo no es esconder una piel real, sino realzar rasgos con el minimo de capas necesarias y respetando la preparacion previa.',sections:[
+    {heading:'Preparacion',prompts:['¿La piel esta comoda e hidratada antes de maquillar?','¿Has dejado asentar el protector solar?']},
+    {heading:'Cinco decisiones',prompts:['1. ¿Necesitas base completa o solo correccion puntual?','2. ¿Que acabado te resulta natural?','3. ¿Que rasgo quieres realzar?','4. ¿Que producto puedes omitir?','5. ¿Como lo retiraras al final del dia?']},
+    {heading:'Tu version de 10 minutos',prompts:['Paso 1:','Paso 2:','Paso 3:','Paso 4:','Paso 5:']}
+  ]},
+  M9:{name:'Cuaderno 9 - Kit inteligente de viaje.pdf',title:'Kit inteligente de viaje',subtitle:'Piel Perfecta 2.0 - Modulo 9',intro:'Tu piel viaja contigo, pero el ambiente cambia. Conserva la base y adapta texturas, cantidades y prioridades sin llevar medio baño en la maleta.',sections:[
+    {heading:'Destino',prompts:['Clima previsto: frio, calor, humedad, sequedad, viento o alta exposicion solar.','Duracion del viaje:','Actividades previstas: playa, nieve, vuelos, piscina, ciudad.']},
+    {heading:'Imprescindibles',prompts:['Limpiador:','Hidratante:','Protector solar:','Tratamiento realmente necesario:']},
+    {heading:'Plan de adaptacion',prompts:['¿Que textura cambiarias si el ambiente es mas seco?','¿Que haras si aumenta la sensibilidad?','¿Que producto puedes dejar en casa?']}
+  ]},
+  M10:{name:'Cuaderno 10 - Tu Rutina Maestra.pdf',title:'Tu Rutina Maestra',subtitle:'Piel Perfecta 2.0 - Proyecto final',intro:'Este es el resultado del curso: una rutina diseñada desde tu realidad, con decisiones que puedes explicar, mantener y adaptar.',sections:[
+    {heading:'Rutina de mañana',prompts:['Paso / producto / funcion:','Paso / producto / funcion:','Paso / producto / funcion:','Tratamiento opcional y motivo:']},
+    {heading:'Rutina de noche',prompts:['Paso / producto / funcion:','Paso / producto / funcion:','Paso / producto / funcion:','Tratamiento opcional y motivo:']},
+    {heading:'Plan de adaptacion',prompts:['¿Que cambia con frio o sequedad?','¿Que cambia con calor o humedad?','¿Que simplificas en viajes o dias complicados?']},
+    {heading:'Rubrica final',prompts:['Personalizacion: ¿responde a tu piel y objetivos?','Criterio: ¿puedes justificar para que sirve cada paso?','Integracion: ¿incorpora lo aprendido sin intentar incluirlo todo?','Sostenibilidad: ¿puedes mantenerla en tiempo, presupuesto y esfuerzo?']}
+  ]}
+};
+
+const PIEL_PERFECTA_TESTS = {
+  M1:[
+    {prompt:'¿Cual es una funcion importante de la barrera cutanea?',options:['Ayudar a limitar la perdida de agua y proteger frente al entorno.','Cambiar el tipo de piel cada semana.','Eliminar la necesidad de protector solar.','Evitar cualquier sensacion en la piel.'],correctOption:0,explanation:'La barrera cutanea ayuda a mantener el equilibrio y a reducir la perdida de agua frente al entorno.'},
+    {prompt:'¿Que enfoque es mas util al observar tu piel?',options:['Buscar patrones de sensaciones y cambios.','Diagnosticarte una enfermedad por una foto.','Cambiar varios productos a la vez.','Ignorar el contexto.'],correctOption:0,explanation:'Observar patrones y contexto ayuda a tomar decisiones sin convertir la observacion en autodiagnostico.'},
+    {prompt:'Si un limpiador deja tirantez y escozor repetidos, ¿que conviene hacer?',options:['Revisar el producto o la forma de uso.','Duplicar la cantidad.','Añadir mas exfoliantes.','Mantenerlo siempre porque la tirantez es obligatoria.'],correctOption:0,explanation:'La tirantez o el escozor repetidos son señales para revisar la limpieza y la tolerancia.'},
+    {prompt:'¿La piel debe entenderse como algo completamente aislado del entorno?',options:['No, puede responder al clima, productos y otros factores.','Si, nunca cambia con el contexto.','Solo cambia por la edad.','Solo cambia por el maquillaje.'],correctOption:0,explanation:'La piel responde a multiples factores y el contexto ayuda a interpretar cambios.'},
+    {prompt:'Ante dolor intenso, hinchazon o ampollas tras un producto, la conducta prudente es:',options:['Suspenderlo y buscar valoracion sanitaria.','Aplicar mas cantidad.','Esperar indefinidamente.','Cubrirlo con maquillaje.'],correctOption:0,explanation:'Las reacciones intensas o persistentes requieren suspender el producto y valorar atencion sanitaria.'}
+  ],
+  M2:[
+    {prompt:'¿Tipo de piel y estado de la piel significan exactamente lo mismo?',options:['No. El estado puede cambiar con el contexto.','Si, siempre son identicos.','Solo se diferencian por la edad.','Solo se diferencian en verano.'],correctOption:0,explanation:'El tipo describe tendencias generales; el estado puede variar con circunstancias y momentos.'},
+    {prompt:'¿Que es mas util al elegir una rutina?',options:['Priorizar las necesidades actuales de la piel.','Copiar una rutina viral completa.','Comprar un producto para cada tendencia.','Cambiar todo cada semana.'],correctOption:0,explanation:'Las decisiones deben partir de necesidades reales y observables.'},
+    {prompt:'¿Cuantas prioridades conviene intentar resolver al mismo tiempo al empezar?',options:['Pocas y claras.','Todas las posibles.','Ninguna durante meses.','Tantas como productos existan.'],correctOption:0,explanation:'Pocas prioridades facilitan evaluar la respuesta y mantener la rutina.'},
+    {prompt:'¿Para que sirve un registro de varios dias?',options:['Para reconocer patrones y contexto.','Para obtener un diagnostico medico automatico.','Para demostrar que una marca es mejor.','Para evitar usar protector solar.'],correctOption:0,explanation:'El registro ayuda a observar tendencias y relacionarlas con productos y contexto.'},
+    {prompt:'Si la piel cambia al viajar o con el clima, eso significa que:',options:['El estado puede modificarse aunque tus tendencias generales sean parecidas.','Tu tipo de piel ha desaparecido para siempre.','Necesitas cambiar toda la rutina.','Debes usar mas productos.'],correctOption:0,explanation:'El estado cutaneo puede cambiar sin que sea necesario reconstruir toda la rutina.'}
+  ],
+  M3:[
+    {prompt:'¿Cuales son los tres pilares basicos del curso?',options:['Limpiar, hidratar y proteger.','Exfoliar, perfumar y cubrir.','Comprar, mezclar y cambiar.','Maquillar, exfoliar y broncear.'],correctOption:0,explanation:'La base propuesta es limpiar, hidratar y proteger.'},
+    {prompt:'Una buena limpieza deberia:',options:['Retirar suciedad y productos sin dejar agresion repetida.','Dejar siempre la piel muy tirante.','Eliminar toda la grasa de la piel.','Necesitar varios limpiadores siempre.'],correctOption:0,explanation:'La limpieza debe ser eficaz y compatible con la tolerancia de la piel.'},
+    {prompt:'¿Que criterio ayuda a elegir una hidratante?',options:['Una textura que puedas usar con constancia y toleres bien.','Que sea la mas cara.','Que tenga el envase mas grande.','Que prometa muchos resultados a la vez.'],correctOption:0,explanation:'La comodidad y la adherencia importan para mantener la hidratacion.'},
+    {prompt:'En la rutina de mañana, el protector solar:',options:['Forma parte de la base de proteccion.','Solo se usa si llevas maquillaje.','Sustituye siempre a la limpieza.','No tiene relacion con el cuidado diario.'],correctOption:0,explanation:'La fotoproteccion completa la base de cuidado diario.'},
+    {prompt:'Al construir una rutina nueva, ¿que estrategia facilita saber que funciona?',options:['Introducir cambios de uno en uno.','Cambiar cinco productos a la vez.','No observar ninguna respuesta.','Elegir solo por tendencias.'],correctOption:0,explanation:'Un cambio cada vez permite identificar mejor tolerancia y respuesta.'}
+  ],
+  M4:[
+    {prompt:'Antes de comprar un cosmetico, la primera pregunta util es:',options:['¿Que funcion necesito cubrir?','¿Es viral?','¿Tiene el envase mas llamativo?','¿Lo usa una persona famosa?'],correctOption:0,explanation:'La funcion y la necesidad deben ir antes que la tendencia.'},
+    {prompt:'¿Que informacion de una etiqueta resulta practica?',options:['Funcion, modo de uso y advertencias.','Solo el nombre comercial.','Solo el precio.','Solo el color del envase.'],correctOption:0,explanation:'La etiqueta debe ayudarte a entender que hace y como usar el producto.'},
+    {prompt:'¿Es necesario perseguir cada ingrediente que se hace viral?',options:['No. Conviene relacionar ingredientes y productos con objetivos concretos.','Si, siempre.','Solo si es caro.','Solo durante el verano.'],correctOption:0,explanation:'El criterio parte de una necesidad, no de acumular ingredientes de moda.'},
+    {prompt:'Al introducir un activo nuevo conviene:',options:['Probar un cambio cada vez y observar tolerancia.','Añadir varios activos nuevos el mismo dia.','Duplicar la frecuencia si pica.','Ignorar las instrucciones del producto.'],correctOption:0,explanation:'Cambios progresivos facilitan valorar tolerancia y respuesta.'},
+    {prompt:'¿Que puede indicar que una compra es innecesaria?',options:['Ya tienes otro producto que cumple la misma funcion.','El producto tiene instrucciones claras.','Su textura te resulta comoda.','Puedes mantenerlo en tu presupuesto.'],correctOption:0,explanation:'Los duplicados de funcion son una fuente frecuente de acumulacion innecesaria.'}
+  ],
+  M5:[
+    {prompt:'La alimentacion dentro del cuidado de la piel debe entenderse como:',options:['Parte de un enfoque global, sin promesas milagro.','Un sustituto universal del tratamiento medico.','La unica causa del estado de la piel.','Una forma de evitar el protector solar.'],correctOption:0,explanation:'La alimentacion acompaña al cuidado, pero no sustituye valoracion ni tratamiento cuando son necesarios.'},
+    {prompt:'¿Que cambio suele ser mas sostenible?',options:['Uno pequeño que puedas mantener.','Cambiar toda tu alimentacion de un dia para otro.','Seguir una lista muy restrictiva sin motivo.','Buscar un alimento milagro.'],correctOption:0,explanation:'La sostenibilidad mejora cuando los cambios son realistas y mantenibles.'},
+    {prompt:'¿Mas productos significa necesariamente mejor piel?',options:['No. La utilidad depende de la necesidad y la tolerancia.','Si, siempre.','Solo los fines de semana.','Solo si todos son de la misma marca.'],correctOption:0,explanation:'El curso prioriza decisiones y constancia por encima de acumular productos.'},
+    {prompt:'Un habito util debe:',options:['Encajar en tu vida real.','Ser dificil para que funcione.','Cambiar cada dia.','Necesitar muchos productos.'],correctOption:0,explanation:'Un habito realista tiene mas posibilidades de mantenerse.'},
+    {prompt:'¿Que es mas util al revisar un habito?',options:['Observar si lo mantienes y que friccion aparece.','Castigarte si un dia no lo cumples.','Duplicarlo al dia siguiente.','Cambiarlo antes de probarlo.'],correctOption:0,explanation:'La revision sirve para simplificar y mejorar adherencia, no para buscar perfeccion.'}
+  ],
+  M6:[
+    {prompt:'El objetivo al observar estres y piel es:',options:['Reconocer patrones sin convertir el cuidado en otra fuente de presion.','Controlar cada variable de forma perfecta.','Culparte por cualquier cambio.','Eliminar todos los productos.'],correctOption:0,explanation:'La observacion debe aportar informacion y bienestar, no aumentar la presion.'},
+    {prompt:'En dias de mucho cansancio puede ser util:',options:['Tener una version minima de la rutina.','Abandonar siempre el cuidado durante semanas.','Añadir mas pasos.','Probar varios activos nuevos.'],correctOption:0,explanation:'Una rutina minima ayuda a conservar lo esencial incluso en dias dificiles.'},
+    {prompt:'¿Que variable puede influir en la constancia de una rutina?',options:['El descanso y el nivel de estres.','Solo el color del envase.','Solo el precio.','Ninguna.'],correctOption:0,explanation:'Descanso, estres y organizacion pueden afectar la adherencia.'},
+    {prompt:'El movimiento y el bienestar se incluyen en el curso para:',options:['Integrar el cuidado en un contexto de vida real.','Prometer curar enfermedades cutaneas.','Sustituir la fotoproteccion.','Hacer la rutina mas larga.'],correctOption:0,explanation:'Se incorporan como contexto general de bienestar y sostenibilidad.'},
+    {prompt:'¿Que es preferible?',options:['Una rutina realista y constante.','Una rutina perfecta que nunca puedes cumplir.','Cambiar de rutina cada dia.','Usar todos los productos disponibles.'],correctOption:0,explanation:'La constancia sostenible es uno de los principios centrales del curso.'}
+  ],
+  M7:[
+    {prompt:'Un ritual de cuidado aporta valor cuando:',options:['Es agradable, seguro y compatible con las necesidades de la piel.','Incluye el mayor numero posible de pasos.','Copia cualquier tradicion sin contexto.','Produce irritacion para demostrar que funciona.'],correctOption:0,explanation:'El ritual debe aportar bienestar sin añadir agresion o complejidad innecesaria.'},
+    {prompt:'Al conocer rituales de otras culturas conviene:',options:['Rescatar ideas utiles y adaptarlas con criterio.','Copiarlos literalmente siempre.','Asumir que todo lo tradicional es seguro.','Añadir todos los pasos a la vez.'],correctOption:0,explanation:'La adaptacion critica permite aprovechar ideas sin perder seguridad ni contexto.'},
+    {prompt:'¿Que filtro ayuda a diseñar tu propio ritual?',options:['Preguntarte si cada paso tiene una funcion o un motivo claro.','Elegir solo por apariencia.','Añadir pasos hasta ocupar una hora.','Evitar cualquier rutina sencilla.'],correctOption:0,explanation:'Cada paso debe tener un motivo y encajar en tu realidad.'},
+    {prompt:'Si un ritual genera irritacion repetida, conviene:',options:['Revisarlo y retirar el elemento problematico.','Mantenerlo porque es un ritual.','Aumentar la friccion.','Añadir un exfoliante.'],correctOption:0,explanation:'El disfrute nunca debe justificar practicas que la piel no tolera.'},
+    {prompt:'La sostenibilidad de un ritual depende en parte de:',options:['Que puedas repetirlo sin demasiada friccion.','Que sea caro.','Que tenga muchos productos.','Que sea identico al de otra persona.'],correctOption:0,explanation:'Un ritual sostenible debe ser realista para tu tiempo y preferencias.'}
+  ],
+  M8:[
+    {prompt:'La idea central del maquillaje natural en el curso es:',options:['Realzar, no esconder obligatoriamente la piel.','Cubrir toda textura visible.','Usar siempre una base de alta cobertura.','Añadir el mayor numero de capas.'],correctOption:0,explanation:'El maquillaje se plantea como una herramienta de expresion y realce.'},
+    {prompt:'Antes de maquillar es util comprobar que:',options:['La piel esta comoda y la preparacion previa ha asentado.','La piel esta tirante.','Has usado muchos activos nuevos.','No has aplicado ningun cuidado.'],correctOption:0,explanation:'Una preparacion comoda facilita un acabado natural.'},
+    {prompt:'Para un resultado natural suele ayudar:',options:['Usar solo la cobertura que realmente necesitas.','Cubrir siempre todo el rostro por igual.','No retirar el maquillaje por la noche.','Aplicar varias bases diferentes.'],correctOption:0,explanation:'La correccion selectiva puede reducir capas y mantener un resultado natural.'},
+    {prompt:'¿Que pregunta encaja con el criterio del curso?',options:['¿Que producto puedo omitir sin perder el resultado que busco?','¿Como puedo añadir tres pasos mas?','¿Que tendencia debo copiar hoy?','¿Como oculto por completo mi piel?'],correctOption:0,explanation:'Simplificar es parte del criterio: cada producto debe tener una razon de estar.'},
+    {prompt:'Al finalizar el dia, el maquillaje debe:',options:['Retirarse con una limpieza adecuada y tolerable.','Quedarse para proteger la piel.','Cubrirse con otra capa.','Retirarse siempre con friccion intensa.'],correctOption:0,explanation:'La limpieza nocturna debe retirar maquillaje y protector sin agresion innecesaria.'}
+  ],
+  M9:[
+    {prompt:'Cuando cambia el clima, la mejor estrategia suele ser:',options:['Mantener la base y ajustar texturas, cantidades o prioridades.','Cambiar toda la rutina automaticamente.','Comprar una rutina nueva completa.','Eliminar la fotoproteccion.'],correctOption:0,explanation:'La base puede mantenerse mientras se ajustan detalles al nuevo entorno.'},
+    {prompt:'¿Que factores ambientales pueden modificar como se siente la piel?',options:['Frio, calor, viento, humedad o aire seco.','Solo la hora del reloj.','Solo el maquillaje.','Ninguno.'],correctOption:0,explanation:'El ambiente puede cambiar confort, sequedad, sensibilidad y otras señales.'},
+    {prompt:'Un kit inteligente de viaje debe:',options:['Incluir lo esencial y evitar duplicados.','Llevar todos tus productos.','Cambiar todos los productos habituales.','Excluir siempre el protector solar.'],correctOption:0,explanation:'Viajar es una buena oportunidad para simplificar a lo realmente necesario.'},
+    {prompt:'La base que el curso mantiene durante los viajes es:',options:['Limpiar, hidratar y proteger.','Exfoliar, perfumar y cubrir.','Cambiar, acumular y experimentar.','Solo maquillar.'],correctOption:0,explanation:'Los tres pilares siguen siendo la referencia aunque cambie el contexto.'},
+    {prompt:'Si durante un viaje la piel se vuelve mas sensible, conviene:',options:['Simplificar y priorizar tolerancia y proteccion.','Añadir varios activos nuevos.','Aumentar la friccion.','Ignorar las señales.'],correctOption:0,explanation:'Ante sensibilidad, simplificar ayuda a reducir variables y priorizar confort.'}
+  ]
+};
+
+async function pielPerfectaGeneratedPdf(def){
+  const pdfLib=await import('pdf-lib');
+  const PDFDocument=pdfLib.PDFDocument,StandardFonts=pdfLib.StandardFonts,rgb=pdfLib.rgb;
+  const pdf=await PDFDocument.create();
+  const regular=await pdf.embedFont(StandardFonts.Helvetica);
+  const bold=await pdf.embedFont(StandardFonts.HelveticaBold);
+  const W=595.28,H=841.89,margin=46;
+  const deep=rgb(0.02,0.24,0.28),teal=rgb(0.03,0.44,0.45),light=rgb(0.94,0.97,0.97),ink=rgb(0.04,0.16,0.18),muted=rgb(0.34,0.43,0.44);
+  const wrap=(txt,font,size,maxWidth)=>{
+    const words=String(txt||'').split(/\s+/).filter(Boolean),lines=[];let line='';
+    for(const word of words){const trial=line?line+' '+word:word;if(!line||font.widthOfTextAtSize(trial,size)<=maxWidth)line=trial;else{lines.push(line);line=word;}}
+    if(line)lines.push(line);return lines;
+  };
+  const newPage=()=>{
+    const page=pdf.addPage([W,H]);
+    page.drawRectangle({x:0,y:H-92,width:W,height:92,color:deep});
+    page.drawRectangle({x:0,y:H-98,width:W,height:6,color:teal});
+    page.drawText('LYKIOS ACADEMY',{x:margin,y:H-42,size:10,font:bold,color:rgb(1,1,1)});
+    page.drawText(def.title,{x:margin,y:H-70,size:21,font:bold,color:rgb(1,1,1)});
+    page.drawText(def.subtitle,{x:margin,y:H-84,size:9,font:regular,color:rgb(0.78,0.91,0.90)});
+    page.drawText('Piel Perfecta 2.0 - Material educativo',{x:margin,y:24,size:8,font:regular,color:muted});
+    return page;
+  };
+  let page=newPage(),y=H-128;
+  const ensure=(needed=60)=>{if(y<margin+needed){page=newPage();y=H-128;}};
+  const drawParagraph=(txt,size=10.2,color=ink,gap=14)=>{
+    for(const line of wrap(txt,regular,size,W-margin*2)){ensure(22);page.drawText(line,{x:margin,y,size,font:regular,color});y-=gap;}
+    y-=5;
+  };
+  drawParagraph(def.intro,10.5,ink,14.5);
+  for(const section of def.sections||[]){
+    ensure(90);
+    page.drawRectangle({x:margin-6,y:y-6,width:W-margin*2+12,height:25,color:light});
+    page.drawText(section.heading,{x:margin,y,size:12,font:bold,color:deep});
+    y-=34;
+    for(const prompt of section.prompts||[]){
+      ensure(70);
+      const lines=wrap(prompt,regular,10,W-margin*2);
+      for(const line of lines){page.drawText(line,{x:margin,y,size:10,font:regular,color:ink});y-=13;}
+      y-=7;
+      for(let i=0;i<2;i++){ensure(18);page.drawLine({start:{x:margin,y},end:{x:W-margin,y},thickness:0.5,color:rgb(0.75,0.80,0.80)});y-=18;}
+      y-=5;
+    }
+    y-=7;
+  }
+  return Buffer.from(await pdf.save());
+}
+
+function ensurePielPerfectaExtras(db){
+  db.meta ||= {};
+  const current=Number(db.meta.pielPerfectaExtrasVersion)||0;
+  if(current>=PIEL_PERFECTA_EXTRAS_VERSION)return {changed:false,reason:'already_current'};
+  const course=db.courses.find(c=>c.slug==='piel-perfecta-20');
+  if(!course)return {changed:false,reason:'course_missing'};
+  const t=now(); let changed=false; let resourceCount=0; let assessmentCount=0; let questionCount=0;
+
+  for(const module of db.modules.filter(m=>m.courseId===course.id)){
+    const def=PIEL_PERFECTA_RESOURCE_BOOKLETS[module.code];
+    if(def){
+      const lessons=db.lessons.filter(l=>l.moduleId===module.id).sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0));
+      const target=lessons[lessons.length-1];
+      if(target){
+        target.resources ||= [];
+        const gkey='piel-perfecta:'+module.code;
+        let resource=target.resources.find(r=>r.generatedKey===gkey);
+        if(!resource){
+          resource={id:newId(),name:def.name,mime:'application/pdf',size:null,generatedKey:gkey,createdAt:t};
+          target.resources.push(resource);changed=true;
+        }else{
+          resource.name=def.name;resource.mime='application/pdf';changed=true;
+        }
+        resourceCount++;
+      }
+    }
+
+    const questions=PIEL_PERFECTA_TESTS[module.code];
+    if(questions?.length){
+      let assessment=assessmentForScope(db,'module',module.id);
+      const shortTitle=module.title.replace(/^Módulo \d+ · /,'');
+      const testTitle='Test '+module.code.replace('M','')+' - '+shortTitle;
+      if(!assessment){
+        assessment={id:newId(),scopeType:'module',scopeId:module.id,title:testTitle,instructions:'5 preguntas sencillas de repaso. Selecciona una sola respuesta en cada pregunta.',passingScore:80,maxAttempts:3,status:'draft',createdAt:t,updatedAt:t};
+        db.assessments.push(assessment);changed=true;
+      }else{
+        assessment.title=testTitle;
+        assessment.instructions='5 preguntas sencillas de repaso. Selecciona una sola respuesta en cada pregunta.';
+        assessment.passingScore=80;assessment.maxAttempts=3;assessment.status='draft';assessment.updatedAt=t;changed=true;
+      }
+      db.questions=db.questions.filter(q=>q.assessmentId!==assessment.id);
+      questions.forEach((q,i)=>db.questions.push({id:newId(),assessmentId:assessment.id,prompt:q.prompt,type:'single_choice',options:q.options,correctOption:q.correctOption,explanation:q.explanation,position:i+1,createdAt:t,updatedAt:t}));
+      assessmentCount++;questionCount+=questions.length;changed=true;
+    }
+  }
+  db.meta.pielPerfectaExtrasVersion=PIEL_PERFECTA_EXTRAS_VERSION;
+  return {changed,courseId:course.id,resourceCount,assessmentCount,questionCount};
+}
+
 function passwordPolicy(password){
   const value=String(password||'');
   if(value.length<12) return 'La contraseña debe tener al menos 12 caracteres';
@@ -488,6 +718,10 @@ async function readDb(){
   if(IS_PREVIEW){
     const pp=ensurePielPerfectaStructure(db);
     if(pp.changed){changed=true;logEvent('info','piel_perfecta_structure_ready',pp);}
+  }
+  if(IS_PREVIEW){
+    const px=ensurePielPerfectaExtras(db);
+    if(px.changed){changed=true;logEvent('info','piel_perfecta_extras_ready',px);}
   }
   if(changed) await writeDb(db);
   return db;
@@ -1747,6 +1981,17 @@ export const handleRequest=async (req,res)=>{
     if(url.pathname==='/api/health' || url.pathname==='/api/health/live') return json(res,200,{ok:true,app:'Lykios LMS',version:APP_VERSION,mode:NODE_ENV});
     if(url.pathname==='/api/health/ready'){ try{const db=await readDb(); const sh=await persistence.health(); return json(res,200,{ok:true,version:APP_VERSION,schemaVersion:db.meta?.schemaVersion||null,storage:sh});}catch(e){return json(res,503,{ok:false,error:'storage_unavailable'});} }
     if(url.pathname==='/api/public/catalog' && req.method==='GET'){const db=await readDb();return json(res,200,catalogPayload(db));}
+    if(IS_PREVIEW && url.pathname==='/api/public/piel-perfecta-preview-check' && req.method==='GET'){
+      const db=await readDb();const course=db.courses.find(c=>c.slug==='piel-perfecta-20');
+      if(!course)return json(res,404,{error:'Curso no encontrado'});
+      const modules=db.modules.filter(m=>m.courseId===course.id);
+      const lessons=db.lessons.filter(l=>l.courseId===course.id);
+      const moduleIds=new Set(modules.map(m=>m.id));
+      const assessments=db.assessments.filter(a=>a.scopeType==='module'&&moduleIds.has(a.scopeId));
+      const assessmentIds=new Set(assessments.map(a=>a.id));
+      const resources=lessons.flatMap(l=>(l.resources||[]).filter(r=>r.generatedKey?.startsWith('piel-perfecta:')));
+      return json(res,200,{title:course.title,status:course.status,saleEnabled:course.saleEnabled,moduleCount:modules.length,lessonCount:lessons.length,generatedResources:resources.length,assessmentCount:assessments.length,questionCount:db.questions.filter(q=>assessmentIds.has(q.assessmentId)).length,assessmentStatuses:[...new Set(assessments.map(a=>a.status))]});
+    }
     if(url.pathname==='/api/checkout/create' && req.method==='POST'){
       if(PAYMENT_PROVIDER!=='stripe'&&IS_PROD)return json(res,503,{error:'Pasarela de pago no configurada'});
       const body=await readBody(req);
@@ -2139,7 +2384,13 @@ export const handleRequest=async (req,res)=>{
         const {lesson,resource}=found;
         const allowed=user.role==='admin'||canTeachCourse(db,user,lesson.courseId)||canAccessLesson(db,user,lesson);
         if(!allowed) return json(res,403,{error:'Sin acceso al recurso'});
-        const file=path.join(UPLOAD_DIR,path.basename(resource.storageName||''));
+        if(resource.generatedKey?.startsWith('piel-perfecta:')){
+          const moduleCode=resource.generatedKey.split(':')[1];
+          const def=PIEL_PERFECTA_RESOURCE_BOOKLETS[moduleCode];
+          if(!def)return json(res,404,{error:'Recurso generado no disponible'});
+          const buf=await pielPerfectaGeneratedPdf(def);
+          return text(res,200,buf,'application/pdf',{'content-disposition':`attachment; filename*=UTF-8''${encodeURIComponent(resource.name)}`,'x-content-type-options':'nosniff'});
+        }
         try{const buf=await resourceStore.read(resource.storageName);return text(res,200,buf,resource.mime||'application/octet-stream',{'content-disposition':`attachment; filename*=UTF-8''${encodeURIComponent(resource.name)}`,'x-content-type-options':'nosniff'});}catch{return json(res,404,{error:'Archivo no disponible'});}
       }
 
