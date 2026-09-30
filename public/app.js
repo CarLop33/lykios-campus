@@ -65,28 +65,24 @@ function videoWatermarkIdentity(){
   const email=String(state.me?.email||'').trim();
   return {name:name||'Usuario Lykios',email};
 }
-function moveVideoWatermark(el,step=0){
+function moveVideoWatermark(el){
   if(!el)return;
-  const positions=[[18,24],[72,22],[40,38],[68,48],[24,62],[74,66],[48,30],[36,70]];
-  const pos=positions[Math.abs(Number(step)||0)%positions.length];
-  el.style.left=pos[0]+'%';
-  el.style.top=pos[1]+'%';
+  el.style.left='auto';
+  el.style.right='18px';
+  el.style.top='52px';
+  el.style.transform='none';
 }
 function startVideoWatermark(video,index){
   const wm=$('#videoWatermark_'+index);if(!wm)return;
   clearInterval(video._lykiosWatermarkTimer);
-  video._lykiosWatermarkStep=(video._lykiosWatermarkStep||0)+1;
-  moveVideoWatermark(wm,video._lykiosWatermarkStep);
+  video._lykiosWatermarkTimer=null;
+  moveVideoWatermark(wm);
   wm.classList.add('active');
-  video._lykiosWatermarkTimer=setInterval(()=>{
-    video._lykiosWatermarkStep=(video._lykiosWatermarkStep||0)+1;
-    moveVideoWatermark(wm,video._lykiosWatermarkStep);
-  },12000);
 }
 function stopVideoWatermark(video,index){
   clearInterval(video._lykiosWatermarkTimer);
   video._lykiosWatermarkTimer=null;
-  const wm=$('#videoWatermark_'+index);if(wm)wm.classList.add('active');
+  const wm=$('#videoWatermark_'+index);if(wm){moveVideoWatermark(wm);wm.classList.add('active')}
 }
 async function toggleVideoShellFullscreen(video,index){
   const shell=video?.closest?.('.video-shell');if(!shell)return;
