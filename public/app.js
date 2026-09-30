@@ -19,7 +19,7 @@ async function loadDashboard(){
     else{state.course=null;state.certificateStatus=null}
   }catch{state.course=null;state.certificateStatus=null}
 }
-async function refreshAdmin(){const [content,summary,certs,commerce,students,emails,analytics,monetization,teachers,tutorAudit]=await Promise.all([api('/api/admin/content'),api('/api/admin/summary'),api('/api/admin/certificates'),api('/api/admin/commerce'),api('/api/admin/students'),api('/api/admin/emails'),api('/api/admin/analytics'),api('/api/admin/monetization'),api('/api/admin/teachers'),api('/api/admin/tutor/audit')]);state.adminContent=content;state.adminSummary=summary;state.adminCertificates=certs.certificates||[];state.adminCommerce=commerce||{orders:[],payments:[]};state.adminStudents=students||{students:[],courses:[]};state.adminEmails=emails.emails||[];state.adminAnalytics=analytics;state.adminMonetization=monetization||{bundles:[],coupons:[],promotions:[],courses:[]};state.adminTeachers=teachers||{teachers:[],courses:[]};state.adminTutor=tutorAudit||{policy:null,items:[]}}
+async function refreshAdmin(){const [content,summary,certs,commerce,students,emails,analytics,monetization,teachers,tutorAudit,ppReadiness]=await Promise.all([api('/api/admin/content'),api('/api/admin/summary'),api('/api/admin/certificates'),api('/api/admin/commerce'),api('/api/admin/students'),api('/api/admin/emails'),api('/api/admin/analytics'),api('/api/admin/monetization'),api('/api/admin/teachers'),api('/api/admin/tutor/audit'),api('/api/admin/piel-perfecta/readiness').catch(()=>null)]);state.adminContent=content;state.adminSummary=summary;state.adminCertificates=certs.certificates||[];state.adminCommerce=commerce||{orders:[],payments:[]};state.adminStudents=students||{students:[],courses:[]};state.adminEmails=emails.emails||[];state.adminAnalytics=analytics;state.adminMonetization=monetization||{bundles:[],coupons:[],promotions:[],courses:[]};state.adminTeachers=teachers||{teachers:[],courses:[]};state.adminTutor=tutorAudit||{policy:null,items:[]};state.pielPerfectaReadiness=ppReadiness}
 async function refreshTeacher(){const [content,summary,students,analytics]=await Promise.all([api('/api/teacher/content'),api('/api/teacher/summary'),api('/api/teacher/students'),api('/api/teacher/analytics')]);state.teacherContent=content;state.teacherSummary=summary;state.teacherStudents=students.students||[];state.teacherAnalytics=analytics}
 
 function shell(inner,active='dashboard'){
@@ -96,14 +96,121 @@ function openTeacherModuleForm(courseId,id=''){const m=id?findTeacherModule(id):
 function openTeacherLessonForm(moduleId,id=''){const l=id?findTeacherLesson(id):null;drawer(l?'Editar clase':'Nueva clase',`<form id="teacherLessonForm" class="admin-form"><div class="form-grid"><div class="field"><label>Código</label><input name="code" value="${esc(l?.code||'')}"></div><div class="field"><label>Posición</label><input name="position" type="number" min="1" value="${l?.position||''}"></div></div><div class="field"><label>Título</label><input name="title" required value="${esc(l?.title||'')}"></div><div class="field"><label>Descripción</label><textarea name="summary" rows="5">${esc(l?.summary||'')}</textarea></div><div class="form-grid"><div class="field"><label>Duración</label><input name="durationMinutes" type="number" value="${l?.durationMinutes||10}"></div><div class="field"><label>Estado</label><select name="status"><option value="draft" ${l?.status!=='published'?'selected':''}>Borrador</option><option value="published" ${l?.status==='published'?'selected':''}>Publicado</option></select></div></div><div class="field"><label>Vídeo / referencia</label><input name="video" value="${esc(l?.video||'')}"></div><div class="tutor-editor"><div class="field"><label>Contenido aprobado para Lykios AI Tutor</label><textarea name="tutorContent" rows="8">${esc(l?.tutorContent||'')}</textarea></div><div class="tutor-approval-state ${l?.tutorApproved?'approved':'pending'}">${l?.tutorApproved?'✓ Aprobado por Administración':'Pendiente de aprobación por Administración'}</div><small>Si modificas este contenido, volverá automáticamente a estado pendiente.</small></div><div class="drawer-actions"><button type="button" class="btn-secondary" onclick="closeDrawer()">Cancelar</button><button class="btn">Guardar</button></div></form>`);$('#teacherLessonForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.target);const body=Object.fromEntries(fd);body.moduleId=moduleId;try{await api(id?`/api/teacher/lesson/${id}`:'/api/teacher/lesson',{method:id?'PUT':'POST',body:JSON.stringify(body)});closeDrawer();toast('Clase guardada');await renderTeacher()}catch(err){toast(err.message,'error')}}}
 async function teacherUploadResource(lessonId,input){const file=input.files?.[0];if(!file)return;if(file.size>6_000_000)return toast('Máximo 6 MB','error');try{const dataBase64=await fileToBase64(file);await api('/api/teacher/resource',{method:'POST',body:JSON.stringify({lessonId,name:file.name,mime:file.type||'application/octet-stream',dataBase64})});toast('Recurso guardado');await renderTeacher()}catch(e){toast(e.message,'error')}finally{input.value=''}}
 
+
+function renderPielPerfectaLaunchPanel(){
+  const d=state.pielPerfectaReadiness;
+  if(!d)return '';
+  const r=d.readiness||{},l=d.launch||{};
+  const item=(ok,label,detail)=>'<div class="student-line"><span>'+(ok?'✅':'○')+' <b>'+esc(label)+'</b></span><span class="muted">'+esc(detail||'')+'</span></div>';
+  return '<div class="card" style="margin-bottom:18px">'
+    +'<div class="question-editor-head"><div><div class="page-kicker">PIEL PERFECTA 2.0</div><h3>Checklist de lanzamiento</h3></div><span class="status-pill '+(r.ready?'published':'draft')+'">'+(r.ready?'LISTO':'EN PREPARACIÓN')+'</span></div>'
+    +item(l.academicReady,'Arquitectura académica',(r.modules||0)+'/11 módulos · '+(r.lessons||0)+'/33 clases · '+(r.assessments||0)+'/10 evaluaciones · '+(r.questions||0)+'/50 preguntas')
+    +item(l.videosReady,'Vídeos',(r.lessonsWithVideo||0)+'/'+(r.lessons||33)+' clases con vídeo')
+    +item((r.resources||0)>=11,'Recursos descargables',(r.resources||0)+'/11 recursos')
+    +item((r.tutorApproved||0)===33,'Lykios AI Tutor',(r.tutorApproved||0)+'/33 clases aprobadas')
+    +item(d.course?.status==='published','Publicación académica',d.course?.status==='published'?'Publicada':'En borrador')
+    +item(d.course?.saleEnabled===true,'Venta',d.course?.saleEnabled?'Habilitada':'Desactivada')
+    +'<p class="muted" style="margin:12px 0 0">Entorno: '+esc(d.environment||'preview')+' · Stripe '+(l.stripeConfigured?'configurado':'pendiente')+' · Resend '+(l.resendConfigured?'configurado':'pendiente')+'</p>'
+    +'</div>';
+}
+function parseDelimitedText(text){
+  const src=String(text||'').replace(/^\uFEFF/,'');
+  const first=(src.split(/\r?\n/).find(x=>x.trim())||'');
+  const candidates=[',',';','\t'];
+  const delimiter=candidates.sort((a,b)=>(first.split(b).length-first.split(a).length))[0];
+  const rows=[];let row=[],field='',quoted=false;
+  for(let i=0;i<src.length;i++){
+    const ch=src[i],next=src[i+1];
+    if(ch==='"'&&quoted&&next==='"'){field+='"';i++;continue}
+    if(ch==='"'){quoted=!quoted;continue}
+    if(ch===delimiter&&!quoted){row.push(field);field='';continue}
+    if((ch==='\n'||ch==='\r')&&!quoted){
+      if(ch==='\r'&&next==='\n')i++;
+      row.push(field);field='';
+      if(row.some(x=>String(x).trim()))rows.push(row);
+      row=[];continue
+    }
+    field+=ch;
+  }
+  row.push(field);
+  if(row.some(x=>String(x).trim()))rows.push(row);
+  return {delimiter,rows};
+}
+function normHeader(v){return String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim()}
+function hotmartRowsFromCsv(text){
+  const parsed=parseDelimitedText(text),rows=parsed.rows;
+  if(rows.length<2)throw new Error('El CSV no contiene filas de alumnos');
+  const headers=rows[0].map(normHeader);
+  const find=names=>headers.findIndex(h=>names.some(n=>h===n||h.includes(n)));
+  const emailIndex=find(['email','e mail','correo','buyer email','email comprador','email do comprador']);
+  const firstIndex=find(['nombre','first name','buyer name','nome comprador','nome do comprador']);
+  const lastIndex=find(['apellidos','apellido','last name','surname','sobrenome']);
+  if(emailIndex<0)throw new Error('No encuentro una columna de email en el CSV');
+  return rows.slice(1).map(r=>{
+    const full=String(r[firstIndex]||'').trim();
+    return {email:String(r[emailIndex]||'').trim(),firstName:full||'Alumno',lastName:lastIndex>=0?String(r[lastIndex]||'').trim():''};
+  }).filter(x=>x.email);
+}
+function openHotmartImport(){
+  const course=(state.adminStudents?.courses||[]).find(c=>c.slug==='piel-perfecta-20');
+  const html='<div class="student-detail">'
+    +'<div class="card" style="margin-bottom:14px"><b>Validación segura</b><p class="muted">En Preview el archivo solo se analiza. No se crean cuentas, no se modifican matrículas y no se envía ningún correo.</p></div>'
+    +'<div class="field"><label>Curso de destino</label><input value="'+esc(course?.title||'Piel Perfecta 2.0')+'" disabled></div>'
+    +'<div class="field"><label>Archivo CSV exportado de Hotmart</label><input id="hotmartCsvInput" type="file" accept=".csv,text/csv"></div>'
+    +'<div id="hotmartCsvPreview" class="card" style="margin-top:14px"><span class="muted">Selecciona el CSV para revisar columnas y alumnos.</span></div>'
+    +'<div class="drawer-actions"><button class="btn-secondary" onclick="closeDrawer()">Cerrar</button><button id="hotmartValidateBtn" class="btn" disabled>Validar alumnos</button></div></div>';
+  drawer('Revisar alumnos de Hotmart',html);
+  const input=$('#hotmartCsvInput'),btn=$('#hotmartValidateBtn'),box=$('#hotmartCsvPreview');
+  if(input)input.onchange=async()=>{
+    try{
+      const file=input.files?.[0];if(!file)return;
+      const rows=hotmartRowsFromCsv(await file.text());
+      state.hotmartImportRows=rows;
+      box.innerHTML='<p><b>'+rows.length+' filas detectadas</b></p><p class="muted">Primeras filas:</p>'+rows.slice(0,8).map(x=>'<div class="student-line"><span>'+esc((x.firstName+' '+x.lastName).trim())+'</span><span>'+esc(x.email)+'</span></div>').join('');
+      btn.disabled=false;
+    }catch(e){
+      state.hotmartImportRows=[];
+      btn.disabled=true;
+      box.innerHTML='<p><b>No puedo leer este CSV.</b></p><p class="muted">'+esc(e.message)+'</p>';
+    }
+  };
+  if(btn)btn.onclick=validateHotmartImport;
+}
+async function validateHotmartImport(){
+  const rows=state.hotmartImportRows||[];
+  if(!rows.length)return toast('Selecciona primero un CSV','error');
+  const box=$('#hotmartCsvPreview'),btn=$('#hotmartValidateBtn');
+  if(btn)btn.disabled=true;
+  try{
+    if(box)box.innerHTML='<span class="muted">Validando alumnos sin modificar ninguna cuenta…</span>';
+    const r=await api('/api/admin/hotmart-import/validate',{method:'POST',body:JSON.stringify({courseSlug:'piel-perfecta-20',students:rows})});
+    const p=r.plan||{};
+    if(box)box.innerHTML='<p><b>Validación terminada</b></p>'
+      +'<div class="student-line"><span>Crear cuenta y matricular</span><span><b>'+(p.createCount||0)+'</b></span></div>'
+      +'<div class="student-line"><span>Cuenta existente · añadir matrícula</span><span><b>'+(p.enrollExistingCount||0)+'</b></span></div>'
+      +'<div class="student-line"><span>Ya matriculados</span><span><b>'+(p.alreadyEnrolledCount||0)+'</b></span></div>'
+      +'<div class="student-line"><span>Emails inválidos</span><span><b>'+(p.invalidCount||0)+'</b></span></div>'
+      +'<div class="student-line"><span>Duplicados en CSV</span><span><b>'+(p.duplicateCount||0)+'</b></span></div>'
+      +'<div class="student-line"><span>Conflictos con cuentas no-alumno</span><span><b>'+(p.conflictCount||0)+'</b></span></div>'
+      +'<p class="muted" style="margin-top:12px">No se ha creado ni modificado ninguna cuenta y no se ha enviado ningún email.</p>';
+    toast('CSV de Hotmart validado');
+  }catch(e){
+    if(box)box.innerHTML='<p><b>Error de validación</b></p><p class="muted">'+esc(e.message)+'</p>';
+    toast(e.message,'error');
+  }finally{
+    if(btn)btn.disabled=false;
+  }
+}
+
 async function renderAdmin(){
   if(state.me.role!=='admin')return setRoute('dashboard');
   try{await refreshAdmin()}catch(e){return toast(e.message,'error')}
   const s=state.adminSummary,courses=state.adminContent.courses;
   document.body.innerHTML=shell(`<div class="admin-hero"><div><div class="page-kicker bright">LYKIOS CONTROL CENTER</div><h1>Administración académica</h1><p>Construye, organiza y publica el catálogo de Lykios Academy desde un único lugar.</p></div><button class="btn gold" onclick="openCourseForm()">＋ Nuevo curso</button></div>
   <div class="admin-metrics">${[['Alumnos',s.students],['Cursos',s.courses],['Clases',s.lessons],['Certificados',s.validCertificates||0]].map(x=>`<div class="card stat"><div class="value">${x[1]}</div><div class="label">${x[0]}</div></div>`).join('')}</div>
+  ${renderPielPerfectaLaunchPanel()}
   <div class="admin-toolbar"><div><h2>Contenido académico</h2><p class="muted">Curso → módulo → clase → recursos → evaluaciones</p></div><div class="legend">${statusPill('published')} ${statusPill('draft')}</div></div>
-  <div class="admin-toolbar"><div><h2>Monetización</h2><p class="muted">Packs, cupones, becas y promociones automáticas.</p></div></div>${renderMonetization()}<div class="admin-toolbar"><div><h2>Analítica académica</h2><p class="muted">Finalización, progreso, vídeo, evaluaciones y puntos de abandono.</p></div></div>${renderAdminAnalytics()}<div class="admin-toolbar"><div><h2>Gobernanza del Tutor IA</h2><p class="muted">Privacidad, retención y trazabilidad de respuestas.</p></div></div>${renderAdminTutor()}<div class="admin-catalog">${courses.map(renderAdminCourse).join('')||'<div class="card empty">Todavía no hay cursos.</div>'}</div><div class="admin-toolbar"><div><h2>Docentes</h2><p class="muted">Alta de profesores/autores y asignación de cursos.</p></div><button class="btn-secondary" onclick="openTeacherAdminForm()">＋ Nuevo docente</button></div><div class="card teacher-admin-table">${renderAdminTeachers()}</div><div class="admin-toolbar"><div><h2>Alumnos</h2><p class="muted">Matrículas, progreso, evaluaciones, certificados y gestión de acceso.</p></div></div><div class="card student-admin-table">${renderAdminStudents()}</div><div class="admin-toolbar"><div><h2>Ventas y matrículas</h2><p class="muted">Pedidos confirmados por el motor de pagos.</p></div></div><div class="card certificate-admin-table">${renderAdminOrders()}</div><div class="admin-toolbar"><div><h2>Certificados emitidos</h2><p class="muted">Registro verificable y control de revocación.</p></div><a class="btn-secondary" href="/api/admin/certificate/preview" target="_blank">Vista previa PDF</a></div><div class="card certificate-admin-table">${renderAdminCertificates()}</div><div class="admin-toolbar"><div><h2>Emails transaccionales</h2><p class="muted">Bandeja de salida local y auditoría de comunicaciones.</p></div></div><div class="card certificate-admin-table">${renderAdminEmails()}</div>
+  <div class="admin-toolbar"><div><h2>Monetización</h2><p class="muted">Packs, cupones, becas y promociones automáticas.</p></div></div>${renderMonetization()}<div class="admin-toolbar"><div><h2>Analítica académica</h2><p class="muted">Finalización, progreso, vídeo, evaluaciones y puntos de abandono.</p></div></div>${renderAdminAnalytics()}<div class="admin-toolbar"><div><h2>Gobernanza del Tutor IA</h2><p class="muted">Privacidad, retención y trazabilidad de respuestas.</p></div></div>${renderAdminTutor()}<div class="admin-catalog">${courses.map(renderAdminCourse).join('')||'<div class="card empty">Todavía no hay cursos.</div>'}</div><div class="admin-toolbar"><div><h2>Docentes</h2><p class="muted">Alta de profesores/autores y asignación de cursos.</p></div><button class="btn-secondary" onclick="openTeacherAdminForm()">＋ Nuevo docente</button></div><div class="card teacher-admin-table">${renderAdminTeachers()}</div><div class="admin-toolbar"><div><h2>Alumnos</h2><p class="muted">Matrículas, progreso, evaluaciones, certificados y gestión de acceso.</p></div><button class="btn-secondary" onclick="openHotmartImport()">Revisar CSV de Hotmart</button></div><div class="card student-admin-table">${renderAdminStudents()}</div><div class="admin-toolbar"><div><h2>Ventas y matrículas</h2><p class="muted">Pedidos confirmados por el motor de pagos.</p></div></div><div class="card certificate-admin-table">${renderAdminOrders()}</div><div class="admin-toolbar"><div><h2>Certificados emitidos</h2><p class="muted">Registro verificable y control de revocación.</p></div><a class="btn-secondary" href="/api/admin/certificate/preview" target="_blank">Vista previa PDF</a></div><div class="card certificate-admin-table">${renderAdminCertificates()}</div><div class="admin-toolbar"><div><h2>Emails transaccionales</h2><p class="muted">Bandeja de salida local y auditoría de comunicaciones.</p></div></div><div class="card certificate-admin-table">${renderAdminEmails()}</div>
   <div class="admin-toolbar"><div><h2>Pruebas técnicas</h2><p class="muted">Concurrencia, backup privado y comprobaciones de salud. Solo Preview.</p></div><div><button class="btn-secondary" id="concurrencyTestBtn" onclick="runConcurrencySelfTest()">Prueba concurrente</button> <button class="btn gold" id="previewClosureBtn" onclick="runPreviewClosure()">Ejecutar cierre Preview</button></div></div><div id="concurrencyTestResult" class="card" style="margin-bottom:12px"><span class="muted">Prueba concurrente validada previamente.</span></div><div id="previewClosureResult" class="card" style="margin-bottom:18px"><span class="muted">Cierre Preview aún no ejecutado.</span></div>
   <div id="drawerRoot"></div>`,'admin');const tpf=$('#tutorPolicyForm');if(tpf)tpf.onsubmit=saveTutorPolicy
 }
@@ -377,7 +484,7 @@ const SAFE_CLICK_ACTIONS=new Set([
   'setRoute','logout','openForgotPassword','openStore','render','openCheckout','validateCoupon',
   'openCourse','issueCertificate','openLesson','completeLesson','openAssessment','renderAssessment',
   'openTutorSource','sendTutorFeedback','openBundleForm','openCouponForm','openPromotionForm',
-  'deleteMonetization','publishPielPerfectaReady','closeDrawer','openTeacherModuleForm','openTeacherLessonForm','openCourseForm',
+  'deleteMonetization','publishPielPerfectaReady','openHotmartImport','validateHotmartImport','closeDrawer','openTeacherModuleForm','openTeacherLessonForm','openCourseForm',
   'openTeacherAdminForm','unassignTeacher','assignTeacher','openStudent','toggleStudentStatus',
   'manualEnroll','removeEnrollment','sendCourseCompletedTest','sendCertificateTest','sendReminderTest','sendStudentReminder','runConcurrencySelfTest','runPreviewClosure','flushEmailQueue','retryAdminEmail','resetStudentProgress','revokeCertificate',
   'toggleCourseStatus','deleteCourse','openModuleForm','openAssessmentForm','toggleModuleStatus',
@@ -449,5 +556,5 @@ document.addEventListener('click',event=>{
 
 window.addEventListener('beforeunload',()=>{const a=activeLessonVideo;if(!a?.element?.duration)return;try{navigator.sendBeacon?.('/api/video/progress',new Blob([JSON.stringify({lessonId:a.lessonId,videoId:a.videoId,currentTime:a.element.currentTime,duration:a.element.duration})],{type:'application/json'}))}catch{}})
 function render(route){if(route==='store')return openStore();if(route==='login'||!state.me)return renderLogin();({dashboard:renderDashboard,courses:renderCourses,course:renderCourse,lesson:renderLesson,assessment:renderAssessment,profile:renderProfile,teacher:renderTeacher,admin:renderAdmin}[route]||renderDashboard)()}
-Object.assign(window,{render,issueCertificate,revokeCertificate,setRoute,openCourse,logout,openStore,openForgotPassword,forgotPassword,renderResetPassword,resetPassword,openCheckout,validateCoupon,checkoutMock,checkoutReal,confirmPaymentReturn,openStudent,saveStudentProfile,toggleStudentStatus,manualEnroll,removeEnrollment,resetStudentProgress,addStudentNote,sendStudentWelcome,sendPurchaseTest,sendCourseCompletedTest,sendCertificateTest,sendReminderTest,sendStudentReminder,runConcurrencySelfTest,runPreviewClosure,saveStudentProfileById,flushEmailQueue,retryAdminEmail,openLesson,initLessonVideo,completeLesson,openAssessment,renderAssessment,openCourseForm,openModuleForm,openLessonForm,openAssessmentForm,openQuestionForm,reopenAssessment,deleteQuestion,deleteAssessment,closeDrawer,toggleCourseStatus,toggleModuleStatus,toggleLessonStatus,deleteCourse,deleteModule,deleteLesson,uploadResource,deleteResource,uploadTestVideo,deleteTestVideo,publishPielPerfectaReady,bulkUploadPielPerfectaVideos,openBundleForm,saveBundle,openCouponForm,saveCoupon,openPromotionForm,savePromotion,deleteMonetization,renderTeacher,openTeacherModuleForm,openTeacherLessonForm,teacherUploadResource,openTeacherAdminForm,assignTeacher,unassignTeacher,askTutor,sendTutorFeedback,saveTutorPolicy,openTutorSource,state});
+Object.assign(window,{render,issueCertificate,revokeCertificate,setRoute,openCourse,logout,openStore,openForgotPassword,forgotPassword,renderResetPassword,resetPassword,openCheckout,validateCoupon,checkoutMock,checkoutReal,confirmPaymentReturn,openStudent,saveStudentProfile,toggleStudentStatus,manualEnroll,removeEnrollment,resetStudentProgress,addStudentNote,sendStudentWelcome,sendPurchaseTest,sendCourseCompletedTest,sendCertificateTest,sendReminderTest,sendStudentReminder,runConcurrencySelfTest,runPreviewClosure,saveStudentProfileById,flushEmailQueue,retryAdminEmail,openLesson,initLessonVideo,completeLesson,openAssessment,renderAssessment,openCourseForm,openModuleForm,openLessonForm,openAssessmentForm,openQuestionForm,reopenAssessment,deleteQuestion,deleteAssessment,closeDrawer,toggleCourseStatus,toggleModuleStatus,toggleLessonStatus,deleteCourse,deleteModule,deleteLesson,uploadResource,deleteResource,uploadTestVideo,deleteTestVideo,publishPielPerfectaReady,bulkUploadPielPerfectaVideos,openHotmartImport,validateHotmartImport,openBundleForm,saveBundle,openCouponForm,saveCoupon,openPromotionForm,savePromotion,deleteMonetization,renderTeacher,openTeacherModuleForm,openTeacherLessonForm,teacherUploadResource,openTeacherAdminForm,assignTeacher,unassignTeacher,askTutor,sendTutorFeedback,saveTutorPolicy,openTutorSource,state});
 setTimeout(()=>bootstrap(),0);
