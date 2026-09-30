@@ -43,7 +43,7 @@ const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const MAX_JSON_BYTES = 9_000_000;
 const MAX_RESOURCE_BYTES = 6_000_000;
 const MAX_TEST_VIDEO_BYTES = 3_000_000;
-const MAX_VIDEO_BYTES = 1_000_000_000;
+const MAX_VIDEO_BYTES = 2_000_000_000;
 const VIDEO_TOKEN_TTL_MS = 1000 * 60 * 10;
 const VIDEO_TOKEN_SECRET = process.env.LYKIOS_VIDEO_SECRET || (IS_PROD ? '' : crypto.randomBytes(32).toString('hex'));
 
@@ -2841,10 +2841,10 @@ export const handleRequest=async (req,res)=>{
           const name=cleanText(body.name,220);const mime=cleanText(body.mime,120).toLowerCase();const size=Math.max(0,Number(body.size)||0);
           if(!name||!size)return json(res,400,{error:'Datos de vídeo incompletos'});
           if(!['video/mp4','video/webm','video/quicktime'].includes(mime))return json(res,415,{error:'Formato de vídeo no permitido'});
-          if(size>MAX_VIDEO_BYTES)return json(res,413,{error:'El vídeo supera el límite de 1 GB por archivo'});
+          if(size>MAX_VIDEO_BYTES)return json(res,413,{error:'El vídeo supera el límite de 2 GB por archivo'});
           const ext=path.extname(name).slice(0,10).replace(/[^.a-zA-Z0-9]/g,'')||'.mp4';
           const pathname=`videos/${lesson.id}/${newId()}${ext}`;
-          const expiresAt=Date.now()+15*60*1000;
+          const expiresAt=Date.now()+2*60*60*1000;
           const {issueSignedToken,presignUrl}=await import('@vercel/blob');
           const signedToken=await issueSignedToken({pathname,operations:['put'],validUntil:expiresAt,allowedContentTypes:[mime],maximumSizeInBytes:MAX_VIDEO_BYTES});
           const signed=await presignUrl(signedToken,{pathname,operation:'put',access:'private',validUntil:expiresAt,allowedContentTypes:[mime],maximumSizeInBytes:MAX_VIDEO_BYTES,addRandomSuffix:false,allowOverwrite:false});
