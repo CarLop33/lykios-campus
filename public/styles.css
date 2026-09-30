@@ -207,3 +207,90 @@
   .verify-search-row{grid-template-columns:1fr}.verify-search-row .btn{width:100%}
   .verify-values{margin:26px -22px -28px;gap:14px 20px}.verify-wordmark-text strong{font-size:20px}
 }
+
+
+/* v0.20 · Marca de agua de reproducción personalizada */
+.video-watermark{
+  position:absolute;
+  left:18%;
+  top:24%;
+  transform:translate(-50%,-50%);
+  z-index:5;
+  pointer-events:none;
+  user-select:none;
+  -webkit-user-select:none;
+  opacity:0;
+  max-width:min(52%,440px);
+  padding:8px 11px;
+  border:1px solid rgba(255,255,255,.22);
+  border-radius:10px;
+  background:rgba(3,31,36,.32);
+  color:rgba(255,255,255,.82);
+  text-shadow:0 1px 4px rgba(0,0,0,.75);
+  box-shadow:0 4px 18px rgba(0,0,0,.10);
+  backdrop-filter:blur(2px);
+  transition:left .8s ease,top .8s ease,opacity .25s ease;
+  line-height:1.15;
+}
+.video-watermark.active{opacity:.78}
+.video-watermark span{
+  display:block;
+  margin-bottom:3px;
+  font-size:8px;
+  font-weight:800;
+  letter-spacing:.16em;
+  opacity:.84;
+}
+.video-watermark b{
+  display:block;
+  font-size:12px;
+  font-weight:800;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.video-watermark small{
+  display:block;
+  margin-top:2px;
+  font-size:9px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.video-overlay-actions{display:flex;align-items:center;gap:8px}
+.video-fullscreen-btn{
+  pointer-events:auto;
+  width:28px;
+  height:28px;
+  display:grid;
+  place-items:center;
+  padding:0;
+  border:1px solid rgba(255,255,255,.28);
+  border-radius:8px;
+  background:rgba(2,31,36,.42);
+  color:#fff;
+  font:700 14px/1 system-ui,sans-serif;
+  cursor:pointer;
+}
+.video-fullscreen-btn:hover{background:rgba(2,31,36,.72)}
+.video-shell:fullscreen{
+  display:grid;
+  place-items:center;
+  background:#000;
+  border-radius:0;
+}
+.video-shell:fullscreen .video-player{
+  width:100vw;
+  height:100vh;
+  max-height:100vh;
+  object-fit:contain;
+}
+.video-shell:fullscreen .video-overlay{z-index:6}
+.video-shell:fullscreen .video-watermark{z-index:7}
+@media(max-width:640px){
+  .video-watermark{max-width:64%;padding:6px 8px}
+  .video-watermark b{font-size:10px}
+  .video-watermark small{font-size:8px}
+  .video-watermark span{font-size:7px}
+  .video-fullscreen-btn{width:26px;height:26px}
+}
