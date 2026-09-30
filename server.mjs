@@ -2301,8 +2301,8 @@ function checkoutMock(db,body,{suppressEmails=false}={}){
     queueEmail(db,{to:user.email,type:'purchase',userId:user.id,courseId:missingCourses[0]?.id||null,meta:{orderNumber:order.number,courseTitle:target.title}});
     markLocalEmailsSent(db);
   }
-  const token=crypto.randomBytes(32).toString('base64url'); db.sessions.push({id:newId(),tokenHash:sessionTokenHash(token),userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+SESSION_TTL_MS).toISOString()});
-  return {user,target,order,payment,enrollments,token};
+  const managed=createManagedSession(db,user,{context:body.__sessionContext||null,source:'checkout',notifyNewDevice:true});
+  return {user,target,order,payment,enrollments,token:managed.token};
 }
 
 async function performMockCheckout(body,{suppressEmails=false}={}){
@@ -2437,9 +2437,8 @@ function prepareCheckout(db,body){
     .sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt))[0]||null;
   if(pendingOrder){
     const payment=db.payments.find(p=>p.orderId===pendingOrder.id)||null;
-    const token=crypto.randomBytes(32).toString('base64url');
-    db.sessions.push({id:newId(),tokenHash:sessionTokenHash(token),userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+SESSION_TTL_MS).toISOString()});
-    return {user,target,order:pendingOrder,payment,missingCourses,coupon:null,token,reused:true};
+    const managed=createManagedSession(db,user,{context:body.__sessionContext||null,source:'checkout',notifyNewDevice:true});
+    return {user,target,order:pendingOrder,payment,missingCourses,coupon:null,token:managed.token,reused:true};
   }
 
   const pr=pricingFor(db,itemType,target);
@@ -2450,8 +2449,8 @@ function prepareCheckout(db,body){
   const order={id:newId(),number:`ORD-${new Date().getFullYear()}-${String(db.orders.length+1).padStart(5,'0')}`,userId:user.id,courseId:itemType==='course'?target.id:null,bundleId:itemType==='bundle'?target.id:null,itemType,itemTitle:target.title,lineCourseIds:validCourses.map(c=>c.id),subtotalCents:pr.baseCents,promotionDiscountCents:pr.discountCents,couponDiscountCents:couponDiscount,discountCents:pr.discountCents+couponDiscount,couponCode:couponResult.coupon?.code||null,totalCents:total,currency:(target.currency||'EUR').toUpperCase(),status:total===0?'pending_free':'pending_payment',provider:total===0?'free':PAYMENT_PROVIDER,createdAt:now(),paidAt:null};
   const payment={id:newId(),orderId:order.id,userId:user.id,amountCents:order.totalCents,currency:order.currency,status:total===0?'pending':'pending',provider:total===0?'free':PAYMENT_PROVIDER,providerRef:null,createdAt:now()};
   db.orders.push(order); db.payments.push(payment);
-  const token=crypto.randomBytes(32).toString('base64url'); db.sessions.push({id:newId(),tokenHash:sessionTokenHash(token),userId:user.id,createdAt:now(),expiresAt:new Date(Date.now()+SESSION_TTL_MS).toISOString()});
-  return {user,target,order,payment,missingCourses,coupon:couponResult.coupon,token};
+  const managed=createManagedSession(db,user,{context:body.__sessionContext||null,source:'checkout',notifyNewDevice:true});
+  return {user,target,order,payment,missingCourses,coupon:couponResult.coupon,token:managed.token};
 }
 function fulfillOrder(db,order,{providerRef=null,eventId=null}={}){
   if(!order) return {error:'Pedido no encontrado',status:404};
@@ -2604,6 +2603,7 @@ export const handleRequest=async (req,res)=>{
     if(url.pathname==='/api/checkout/create' && req.method==='POST'){
       if(PAYMENT_PROVIDER!=='stripe'&&IS_PROD)return json(res,503,{error:'Pasarela de pago no configurada'});
       const body=await readBody(req);
+      body.__sessionContext=requestSecurityContext(req);
       for(let attempt=0;attempt<3;attempt++){
         const workDb=await readDb();
         const result=prepareCheckout(workDb,body);
@@ -2696,6 +2696,7 @@ export const handleRequest=async (req,res)=>{
     if(url.pathname==='/api/checkout/mock' && req.method==='POST'){
       if(IS_PROD)return json(res,404,{error:'No disponible'});
       const body=await readBody(req);
+      body.__sessionContext=requestSecurityContext(req);
       const result=await performMockCheckout(body);
       return json(res,result.status,result.body,result.token?{'set-cookie':sessionCookie(result.token)}:{});
     }
