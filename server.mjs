@@ -2953,35 +2953,76 @@ export const handleRequest=async (req,res)=>{
 
       if(url.pathname==='/api/video/session' && req.method==='POST'){
         const rl=rateLimit('video-session:'+user.id,120,15*60*1000);if(!rl.ok)return json(res,429,{error:'Demasiadas solicitudes de vídeo. Espera unos minutos.'});
-        const body=await readBody(req); const lesson=db.lessons.find(l=>l.id===body.lessonId);
-        if(!lesson || !canAccessLesson(db,user,lesson)) return json(res,403,{error:'Sin acceso a esta clase'});
-        const videos=lessonVideos(lesson);const selected=body.videoId?videos.find(v=>v.id===body.videoId):videos[0];
-        if(!selected) return json(res,404,{error:'Esta clase aún no tiene vídeo configurado'});
-        const expiresAt=Date.now()+VIDEO_TOKEN_TTL_MS;
-        const token=signVideoToken({userId:user.id,lessonId:lesson.id,expiresAt});
-        let streamUrl=`/api/video/stream?token=${encodeURIComponent(token)}`;
-        const ref=String(selected.ref||'');
-        if(ref.startsWith('blob:')){
-          const pathname=ref.slice(5);
-          const {issueSignedToken,presignUrl}=await import('@vercel/blob');
-          const signedToken=await issueSignedToken({pathname,operations:['get'],validUntil:expiresAt});
-          const signed=await presignUrl(signedToken,{pathname,operation:'get',access:'private',validUntil:expiresAt,useCache:false});
-          streamUrl=signed.presignedUrl;
+        const body=await readBody(req);
+        for(let attempt=0;attempt<3;attempt++){
+          const workDb=attempt===0?db:await readDb();
+          const workUser=workDb.users.find(u=>u.id===user.id);
+          const session=currentSession(req,workDb);
+          const lesson=workDb.lessons.find(l=>l.id===body.lessonId);
+          if(!workUser||!session)return json(res,401,{error:'La sesión ha caducado. Vuelve a iniciar sesión.'});
+          if(!lesson||!canAccessLesson(workDb,workUser,lesson))return json(res,403,{error:'Sin acceso a esta clase'});
+          const videos=lessonVideos(lesson);
+          const selected=body.videoId?videos.find(v=>v.id===body.videoId):videos[0];
+          if(!selected)return json(res,404,{error:'Esta clase aún no tiene vídeo configurado'});
+
+          let leaseResult=acquireVideoLease(workDb,workUser,session,{lessonId:lesson.id,videoId:selected.id});
+          if(!leaseResult.ok){
+            const escalated=enforceHighRiskAfterPlayback(workDb,workUser,session);
+            if(escalated)leaseResult=acquireVideoLease(workDb,workUser,session,{lessonId:lesson.id,videoId:selected.id});
+          }
+          session.lastSeenAt=now();
+          try{
+            await writeDb(workDb);
+          }catch(error){
+            if(error?.code==='STORAGE_CONFLICT'&&attempt<2)continue;
+            throw error;
+          }
+          if(!leaseResult.ok)return json(res,409,{error:'Tu cuenta ya está reproduciendo un vídeo en otro dispositivo. Pausa allí la reproducción antes de continuar.'});
+
+          const expiresAt=Date.now()+VIDEO_TOKEN_TTL_MS;
+          const token=signVideoToken({userId:workUser.id,lessonId:lesson.id,expiresAt});
+          let streamUrl='/api/video/stream?token='+encodeURIComponent(token);
+          const ref=String(selected.ref||'');
+          if(ref.startsWith('blob:')){
+            const pathname=ref.slice(5);
+            const {issueSignedToken,presignUrl}=await import('@vercel/blob');
+            const signedToken=await issueSignedToken({pathname,operations:['get'],validUntil:expiresAt});
+            const signed=await presignUrl(signedToken,{pathname,operation:'get',access:'private',validUntil:expiresAt,useCache:false});
+            streamUrl=signed.presignedUrl;
+          }
+          return json(res,200,{expiresAt,videoId:selected.id,name:selected.name,streamUrl,progress:videoProgressPayload(workDb,workUser,lesson.id,selected.id),protection:{privateStorage:ref.startsWith('blob:'),expiresAt,downloadUi:false,maxConcurrentPlayback:1}});
         }
-        return json(res,200,{expiresAt,videoId:selected.id,name:selected.name,streamUrl,progress:videoProgressPayload(db,user,lesson.id,selected.id),protection:{privateStorage:ref.startsWith('blob:'),expiresAt,downloadUi:false}});
+        return json(res,503,{error:'El Campus está sincronizando tu sesión. Inténtalo de nuevo.'});
       }
       if(url.pathname==='/api/video/progress' && req.method==='POST'){
         const body=await readBody(req);
         const currentTime=Math.max(0,Number(body.currentTime)||0), duration=Math.max(0,Number(body.duration)||0);
         const percent=duration>0?Math.min(100,Math.round(currentTime/duration*100)):0;
+        const playing=body.playing!==false;
         for(let attempt=0;attempt<3;attempt++){
           const workDb=attempt===0?db:await readDb();
           const workUser=workDb.users.find(u=>u.id===user.id);
+          const session=currentSession(req,workDb);
           const lesson=workDb.lessons.find(l=>l.id===body.lessonId);
-          if(!workUser||!lesson||!canAccessLesson(workDb,workUser,lesson)) return json(res,403,{error:'Sin acceso a esta clase'});
+          if(!workUser||!session)return json(res,401,{error:'La sesión ha caducado. Vuelve a iniciar sesión.'});
+          if(!lesson||!canAccessLesson(workDb,workUser,lesson))return json(res,403,{error:'Sin acceso a esta clase'});
           const videos=lessonVideos(lesson);
           const selected=body.videoId?videos.find(v=>v.id===body.videoId):videos[0];
           if(!selected)return json(res,404,{error:'Vídeo no encontrado'});
+
+          if(playing){
+            let leaseResult=acquireVideoLease(workDb,workUser,session,{lessonId:lesson.id,videoId:selected.id});
+            if(!leaseResult.ok){
+              const escalated=enforceHighRiskAfterPlayback(workDb,workUser,session);
+              if(escalated)leaseResult=acquireVideoLease(workDb,workUser,session,{lessonId:lesson.id,videoId:selected.id});
+            }
+            if(!leaseResult.ok){
+              try{await writeDb(workDb);}catch(error){if(error?.code==='STORAGE_CONFLICT'&&attempt<2)continue;throw error;}
+              return json(res,409,{error:'Se ha detectado reproducción simultánea en otro dispositivo. Esta reproducción se ha detenido.'});
+            }
+          }else releaseVideoLease(workDb,workUser.id,session.id);
+
+          session.lastSeenAt=now();
           let vp=workDb.videoProgress.find(x=>x.userId===workUser.id&&x.lessonId===lesson.id&&String(x.videoId||'')===String(selected.id));
           if(!vp){vp={id:newId(),userId:workUser.id,lessonId:lesson.id,videoId:selected.id,currentTime:0,duration:0,percent:0,completed:false,lastPlayedAt:null};workDb.videoProgress.push(vp)}
           vp.currentTime=currentTime; vp.duration=duration; vp.percent=Math.max(vp.percent||0,percent); vp.completed=vp.completed||percent>=90; vp.lastPlayedAt=now();
