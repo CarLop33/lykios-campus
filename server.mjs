@@ -2026,6 +2026,44 @@ function studentAdminPayload(db,user){
   const notes=(db.studentNotes||[]).filter(n=>n.userId===user.id).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
   return {id:user.id,email:user.email,firstName:user.firstName,lastName:user.lastName,role:user.role,status:user.status||'active',createdAt:user.createdAt,lastLoginAt:user.lastLoginAt||null,enrollments,attempts,certificates,orders,notes};
 }
+
+function normalizeImportEmail(v){
+  const email=cleanText(v,220).toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)?email:null;
+}
+function hotmartImportPlan(db,rows,course){
+  const seen=new Set(),valid=[],invalid=[],duplicates=[];
+  const input=Array.isArray(rows)?rows.slice(0,2000):[];
+  input.forEach((raw,index)=>{
+    const email=normalizeImportEmail(raw?.email);
+    if(!email){invalid.push({row:index+1,email:cleanText(raw?.email,220),reason:'Email no válido'});return}
+    if(seen.has(email)){duplicates.push({row:index+1,email,reason:'Duplicado dentro del archivo'});return}
+    seen.add(email);
+    const firstName=cleanText(raw?.firstName||raw?.name||'Alumno',120)||'Alumno';
+    const lastName=cleanText(raw?.lastName||'',120);
+    const existing=db.users.find(u=>String(u.email||'').toLowerCase()===email)||null;
+    const enrollment=existing?db.enrollments.find(e=>e.userId===existing.id&&e.courseId===course.id)||null:null;
+    valid.push({
+      row:index+1,email,firstName,lastName,
+      existingUser:Boolean(existing),
+      existingRole:existing?.role||null,
+      enrollmentStatus:enrollment?.status||null,
+      action:!existing?'create_and_enroll':existing.role!=='student'?'conflict_non_student':enrollment?.status==='active'?'already_enrolled':'enroll_existing'
+    });
+  });
+  return {
+    total:input.length,
+    validCount:valid.length,
+    invalidCount:invalid.length,
+    duplicateCount:duplicates.length,
+    createCount:valid.filter(x=>x.action==='create_and_enroll').length,
+    enrollExistingCount:valid.filter(x=>x.action==='enroll_existing').length,
+    alreadyEnrolledCount:valid.filter(x=>x.action==='already_enrolled').length,
+    conflictCount:valid.filter(x=>x.action==='conflict_non_student').length,
+    valid,invalid,duplicates
+  };
+}
+
 function studentsAdminPayload(db){
   return db.users.filter(u=>u.role==='student').map(u=>{const p=studentAdminPayload(db,u);return {...p,activeEnrollments:p.enrollments.filter(e=>e.status==='active').length,avgProgress:p.enrollments.length?Math.round(p.enrollments.reduce((a,e)=>a+e.progressPercent,0)/p.enrollments.length):0};}).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
 }
@@ -2724,6 +2762,33 @@ export const handleRequest=async (req,res)=>{
           markLocalEmailsSent(db);
           await writeDb(db);
           return json(res,201,{email:mail});
+        }
+
+
+        if(url.pathname==='/api/admin/piel-perfecta/readiness' && req.method==='GET'){
+          const course=db.courses.find(c=>c.slug==='piel-perfecta-20');
+          if(!course)return json(res,404,{error:'Piel Perfecta 2.0 no encontrado'});
+          const readiness=courseSaleReadiness(db,course);
+          return json(res,200,{
+            environment:VERCEL_ENV||NODE_ENV,
+            course:{id:course.id,title:course.title,status:course.status,saleEnabled:course.saleEnabled},
+            readiness,
+            launch:{
+              videosReady:(readiness.lessonsWithVideo||0)===(readiness.lessons||0)&&Number(readiness.lessons||0)>0,
+              academicReady:(readiness.modules===11&&readiness.lessons===33&&readiness.assessments===10&&readiness.questions===50&&readiness.resources>=11&&readiness.tutorApproved===33),
+              stripeConfigured:Boolean(STRIPE_SECRET_KEY&&STRIPE_WEBHOOK_SECRET),
+              resendConfigured:Boolean(RESEND_API_KEY),
+              storageBackend:STORAGE_BACKEND,
+              fileBackend:FILE_BACKEND
+            }
+          });
+        }
+        if(url.pathname==='/api/admin/hotmart-import/validate' && req.method==='POST'){
+          const body=await readBody(req);
+          const course=db.courses.find(c=>c.slug===cleanText(body.courseSlug||'piel-perfecta-20',160));
+          if(!course)return json(res,404,{error:'Curso no encontrado'});
+          const plan=hotmartImportPlan(db,body.students,course);
+          return json(res,200,{mode:'validation_only',course:{id:course.id,title:course.title,slug:course.slug},plan});
         }
 
         if(url.pathname==='/api/admin/students' && req.method==='GET') return json(res,200,{students:studentsAdminPayload(db),courses:db.courses.map(c=>({id:c.id,title:c.title,slug:c.slug,status:c.status}))});
