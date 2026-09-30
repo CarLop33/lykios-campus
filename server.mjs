@@ -1712,7 +1712,7 @@ function courseHasPublishedContent(db,courseId){
   const publishedModuleIds=db.modules.filter(m=>m.courseId===courseId&&m.status==='published').map(m=>m.id);
   return db.lessons.some(l=>l.courseId===courseId&&l.status==='published'&&publishedModuleIds.includes(l.moduleId));
 }
-function courseSaleReadiness(db,course){
+function courseSaleReadiness(db,course,{ignorePublication=false}={}){
   if(!course)return {ready:false,reasons:['Curso no encontrado']};
   if(course.slug!=='piel-perfecta-20')return {ready:courseHasPublishedContent(db,course.id),reasons:courseHasPublishedContent(db,course.id)?[]:['No hay contenido publicado']};
   const modules=db.modules.filter(m=>m.courseId===course.id);
@@ -1724,13 +1724,13 @@ function courseSaleReadiness(db,course){
   const reasons=[];
   if(modules.length!==11)reasons.push('La estructura debe tener 11 módulos');
   if(lessons.length!==33)reasons.push('La estructura debe tener 33 clases');
-  if(modules.some(m=>m.status!=='published'))reasons.push('Todos los módulos deben estar publicados');
-  if(lessons.some(l=>l.status!=='published'))reasons.push('Todas las clases deben estar publicadas');
+  if(!ignorePublication&&modules.some(m=>m.status!=='published'))reasons.push('Todos los módulos deben estar publicados');
+  if(!ignorePublication&&lessons.some(l=>l.status!=='published'))reasons.push('Todas las clases deben estar publicadas');
   const lessonsWithoutVideo=lessons.filter(l=>lessonVideos(l).length===0);
   if(lessonsWithoutVideo.length)reasons.push('Faltan vídeos en '+lessonsWithoutVideo.length+' clases');
   if(generatedResources.length<11)reasons.push('Faltan recursos descargables');
   if(assessments.length!==10)reasons.push('Deben existir 9 tests y el proyecto final');
-  if(assessments.some(a=>a.status!=='published'))reasons.push('Todas las evaluaciones deben estar publicadas');
+  if(!ignorePublication&&assessments.some(a=>a.status!=='published'))reasons.push('Todas las evaluaciones deben estar publicadas');
   const qCount=db.questions.filter(q=>assessmentIds.has(q.assessmentId)).length;
   if(qCount!==50)reasons.push('Las evaluaciones deben sumar 50 preguntas/criterios');
   if(lessons.some(l=>l.tutorApproved!==true||!String(l.tutorContent||'').trim()))reasons.push('El tutor debe estar aprobado en las 33 clases');
@@ -2809,6 +2809,28 @@ export const handleRequest=async (req,res)=>{
           const question=db.questions.find(q=>q.id===questionMatch[1]);if(!question)return json(res,404,{error:'Pregunta no encontrada'});
           if(req.method==='PUT'){const body=await readBody(req);question.prompt=cleanText(body.prompt||question.prompt,2000);if(Array.isArray(body.options)){const options=body.options.map(x=>cleanText(x,700)).filter(Boolean).slice(0,6);if(options.length<2)return json(res,400,{error:'Se requieren al menos 2 opciones'});question.options=options;}const correct=body.correctOption===undefined?question.correctOption:Number(body.correctOption);if(!Number.isInteger(correct)||correct<0||correct>=question.options.length)return json(res,400,{error:'Respuesta correcta no válida'});question.correctOption=correct;question.explanation=cleanText(body.explanation??question.explanation,1500);question.position=Math.max(1,Number(body.position)||question.position);question.updatedAt=now();await writeDb(db);return json(res,200,{question});}
           if(req.method==='DELETE'){db.questions=db.questions.filter(q=>q.id!==question.id);db.attempts=db.attempts.filter(a=>a.assessmentId!==question.assessmentId);await writeDb(db);return json(res,200,{ok:true});}
+        }
+
+
+        if(url.pathname==='/api/admin/piel-perfecta/publish-ready' && req.method==='POST'){
+          if(!IS_PREVIEW)return json(res,403,{error:'Esta acción de preparación solo está habilitada en Preview'});
+          const course=db.courses.find(c=>c.slug==='piel-perfecta-20');
+          if(!course)return json(res,404,{error:'Piel Perfecta 2.0 no encontrado'});
+          const preflight=courseSaleReadiness(db,course,{ignorePublication:true});
+          if(!preflight.ready)return json(res,409,{error:'Piel Perfecta todavía no supera el checklist de lanzamiento',readiness:preflight});
+          const modules=db.modules.filter(m=>m.courseId===course.id);
+          const lessons=db.lessons.filter(l=>l.courseId===course.id);
+          const lessonIds=new Set(lessons.map(l=>l.id));
+          const assessments=db.assessments.filter(a=>a.scopeType==='lesson'&&lessonIds.has(a.scopeId));
+          const t=now();
+          modules.forEach(m=>{m.status='published';m.updatedAt=t;});
+          lessons.forEach(l=>{l.status='published';l.updatedAt=t;});
+          assessments.forEach(a=>{a.status='published';a.updatedAt=t;});
+          course.status='published';course.saleEnabled=true;course.sequentialAccess=true;course.updatedAt=t;
+          await writeDb(db);
+          const readiness=courseSaleReadiness(db,course);
+          logEvent('info','piel_perfecta_preview_published',{courseId:course.id,ready:readiness.ready,modules:modules.length,lessons:lessons.length,assessments:assessments.length});
+          return json(res,200,{ok:true,readiness});
         }
 
         const certMatch=url.pathname.match(/^\/api\/admin\/certificate\/([^/]+)\/revoke$/);
