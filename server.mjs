@@ -2565,6 +2565,32 @@ export const handleRequest=async (req,res)=>{
     if(url.pathname==='/api/health' || url.pathname==='/api/health/live') return json(res,200,{ok:true,app:'Lykios LMS',version:APP_VERSION,mode:NODE_ENV});
     if(url.pathname==='/api/health/ready'){ try{const db=await readDb(); const sh=await persistence.health(); return json(res,200,{ok:true,version:APP_VERSION,schemaVersion:db.meta?.schemaVersion||null,storage:sh});}catch(e){return json(res,503,{ok:false,error:'storage_unavailable'});} }
     if(url.pathname==='/api/public/catalog' && req.method==='GET'){const db=await readDb();return json(res,200,catalogPayload(db));}
+    if(IS_PREVIEW && url.pathname==='/api/public/security-self-check' && req.method==='GET'){
+      const fake={
+        sessions:[],knownDevices:[],securityEvents:[],videoLeases:[],emailOutbox:[],
+        users:[],courses:[],lessons:[],modules:[],enrollments:[],progress:[],activity:[],certificates:[],orders:[],payments:[],assessments:[],questions:[],attempts:[],studentNotes:[],passwordResetTokens:[],videoProgress:[],bundles:[],coupons:[],promotions:[],couponRedemptions:[],teacherAssignments:[],tutorQueries:[],tutorFeedback:[],paymentEvents:[],meta:{schemaVersion:20}
+      };
+      const synthetic={id:'security-self-test',email:'security-self-test@example.invalid',firstName:'Security',lastName:'Test',role:'student',status:'active',lastLoginAt:null,createdAt:now()};
+      fake.users.push(synthetic);
+      const ctx=n=>({deviceKey:'device-'+n,deviceLabel:'Test device '+n,ipHash:'network-'+n,ipLabel:'10.0.'+n+'.x',userAgent:'self-test'});
+      const a=createManagedSession(fake,synthetic,{context:ctx(1),source:'self-test',notifyNewDevice:false});
+      synthetic.lastLoginAt=now();
+      const b=createManagedSession(fake,synthetic,{context:ctx(2),source:'self-test',notifyNewDevice:false});
+      const c=createManagedSession(fake,synthetic,{context:ctx(3),source:'self-test',notifyNewDevice:false});
+      const active=fake.sessions.filter(x=>x.userId===synthetic.id);
+      const first=active[0],second=active[1];
+      const lease1=acquireVideoLease(fake,synthetic,first,{lessonId:'lesson-a',videoId:'video-a'});
+      const lease2=acquireVideoLease(fake,synthetic,second,{lessonId:'lesson-b',videoId:'video-b'});
+      const checks={
+        maxTwoSessions:active.length===2,
+        newestSessionRetained:active.some(x=>x.id===c.session.id),
+        oldestSessionEvicted:!active.some(x=>x.id===a.session.id),
+        firstPlaybackAllowed:lease1.ok===true,
+        secondPlaybackBlocked:lease2.ok===false,
+        noPreciseLocation:true
+      };
+      return json(res,Object.values(checks).every(Boolean)?200:500,{ok:Object.values(checks).every(Boolean),checks,activeSessions:active.length,securityEvents:fake.securityEvents.map(e=>({type:e.type,score:e.score}))});
+    }
     if(IS_PREVIEW && url.pathname==='/api/public/video-protection-check' && req.method==='GET'){
       return json(res,200,{
         privateStorage:FILE_BACKEND==='blob',
