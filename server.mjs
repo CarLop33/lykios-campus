@@ -330,7 +330,7 @@ function ensurePielPerfectaStructure(db){
 
 
 
-const PIEL_PERFECTA_EXTRAS_VERSION = 2;
+const PIEL_PERFECTA_EXTRAS_VERSION = 3;
 
 const PIEL_PERFECTA_RESOURCE_BOOKLETS = {
   M0:{name:'Cuaderno 0 - Mi punto de partida.pdf',title:'Mi punto de partida',subtitle:'Piel Perfecta 2.0 - Modulo 0',intro:'Antes de cambiar tu rutina, registra como esta hoy tu piel, que usas y que quieres conseguir. No es un diagnostico medico: es una fotografia inicial para comparar tu progreso.',sections:[
@@ -459,6 +459,13 @@ const PIEL_PERFECTA_TESTS = {
     {prompt:'Un kit inteligente de viaje debe:',options:['Incluir lo esencial y evitar duplicados.','Llevar todos tus productos.','Cambiar todos los productos habituales.','Excluir siempre el protector solar.'],correctOption:0,explanation:'Viajar es una buena oportunidad para simplificar a lo realmente necesario.'},
     {prompt:'La base que el curso mantiene durante los viajes es:',options:['Limpiar, hidratar y proteger.','Exfoliar, perfumar y cubrir.','Cambiar, acumular y experimentar.','Solo maquillar.'],correctOption:0,explanation:'Los tres pilares siguen siendo la referencia aunque cambie el contexto.'},
     {prompt:'Si durante un viaje la piel se vuelve mas sensible, conviene:',options:['Simplificar y priorizar tolerancia y proteccion.','Añadir varios activos nuevos.','Aumentar la friccion.','Ignorar las señales.'],correctOption:0,explanation:'Ante sensibilidad, simplificar ayuda a reducir variables y priorizar confort.'}
+  ],
+  M10:[
+    {prompt:'¿Has construido por escrito tu rutina de mañana indicando la funcion de cada paso?',options:['Si, esta completa y puedo explicar cada paso.','Todavia no.'],correctOption:0,explanation:'La Rutina Maestra debe convertir lo aprendido en decisiones concretas y justificables.'},
+    {prompt:'¿Has construido por escrito tu rutina de noche indicando la funcion de cada paso?',options:['Si, esta completa y puedo explicar cada paso.','Todavia no.'],correctOption:0,explanation:'La rutina nocturna debe tener una logica clara y adaptada a tus necesidades.'},
+    {prompt:'¿Has revisado que no haya productos duplicados o pasos que no puedas justificar?',options:['Si, he simplificado lo innecesario.','Todavia no.'],correctOption:0,explanation:'Una Rutina Maestra prioriza criterio y evita acumular pasos sin una funcion clara.'},
+    {prompt:'¿Has definido como adaptar tu rutina a viajes, cambios de clima o dias complicados?',options:['Si, tengo una version adaptable.','Todavia no.'],correctOption:0,explanation:'Una buena rutina debe poder adaptarse al contexto sin empezar de cero.'},
+    {prompt:'¿Consideras que tu Rutina Maestra es realista para tu tiempo, presupuesto y constancia?',options:['Si, puedo mantenerla y revisarla con el tiempo.','Todavia no.'],correctOption:0,explanation:'El proyecto final se considera completo cuando la rutina es personalizada, justificable y sostenible.'}
   ]
 };
 
@@ -510,6 +517,12 @@ async function pielPerfectaGeneratedPdf(def){
   return Buffer.from(await pdf.save());
 }
 
+function pielPerfectaTutorText(lesson,module){
+  const safety='Este contenido es educativo para cuidado cosmético general. No diagnostica ni trata enfermedades dermatológicas. Ante dolor intenso, hinchazón, ampollas, dificultad respiratoria, lesiones que cambian o empeoramiento persistente, se debe suspender el producto implicado y buscar valoración sanitaria.';
+  const principles='Principios del curso: observar antes de cambiar; simplificar; introducir cambios de uno en uno; priorizar limpieza, hidratación y fotoprotección; elegir productos por función y necesidad; adaptar la rutina al contexto; evitar promesas milagro y compras guiadas solo por tendencias.';
+  return [module?.title||'',lesson.title,lesson.summary||'',principles,safety].filter(Boolean).join('\n');
+}
+
 function ensurePielPerfectaExtras(db){
   db.meta ||= {};
   const current=Number(db.meta.pielPerfectaExtrasVersion)||0;
@@ -519,6 +532,13 @@ function ensurePielPerfectaExtras(db){
   const t=now(); let changed=false; let resourceCount=0; let assessmentCount=0; let questionCount=0;
 
   for(const module of db.modules.filter(m=>m.courseId===course.id)){
+    for(const lesson of db.lessons.filter(l=>l.moduleId===module.id)){
+      lesson.tutorApproved=true;
+      lesson.tutorContent=pielPerfectaTutorText(lesson,module);
+      lesson.tutorApprovedAt=t;
+      lesson.updatedAt=t;
+      changed=true;
+    }
     const def=PIEL_PERFECTA_RESOURCE_BOOKLETS[module.code];
     if(def){
       const lessons=db.lessons.filter(l=>l.moduleId===module.id).sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0));
@@ -557,14 +577,18 @@ function ensurePielPerfectaExtras(db){
           changed=true;
         }
         const shortTitle=module.title.replace(/^Módulo \d+ · /,'');
-        const testTitle='Test '+module.code.replace('M','')+' - '+shortTitle;
+        const isFinalProject=module.code==='M10';
+        const testTitle=isFinalProject?'Proyecto final · Tu Rutina Maestra':'Test '+module.code.replace('M','')+' - '+shortTitle;
+        const instructions=isFinalProject?'Completa primero el cuaderno Tu Rutina Maestra. Después confirma estos cinco criterios. Debes cumplirlos todos para cerrar el proyecto final.':'5 preguntas sencillas de repaso. Selecciona una sola respuesta en cada pregunta.';
+        const passingScore=isFinalProject?100:80;
+        const maxAttempts=isFinalProject?0:3;
         if(!assessment){
-          assessment={id:newId(),scopeType:'lesson',scopeId:target.id,title:testTitle,instructions:'5 preguntas sencillas de repaso. Selecciona una sola respuesta en cada pregunta.',passingScore:80,maxAttempts:3,status:'draft',createdAt:t,updatedAt:t};
+          assessment={id:newId(),scopeType:'lesson',scopeId:target.id,title:testTitle,instructions,passingScore,maxAttempts,status:'draft',createdAt:t,updatedAt:t};
           db.assessments.push(assessment);changed=true;
         }else{
           assessment.scopeType='lesson';assessment.scopeId=target.id;assessment.title=testTitle;
-          assessment.instructions='5 preguntas sencillas de repaso. Selecciona una sola respuesta en cada pregunta.';
-          assessment.passingScore=80;assessment.maxAttempts=3;assessment.status='draft';assessment.updatedAt=t;changed=true;
+          assessment.instructions=instructions;
+          assessment.passingScore=passingScore;assessment.maxAttempts=maxAttempts;assessment.status='draft';assessment.updatedAt=t;changed=true;
         }
         db.questions=db.questions.filter(q=>q.assessmentId!==assessment.id);
         questions.forEach((q,i)=>db.questions.push({id:newId(),assessmentId:assessment.id,prompt:q.prompt,type:'single_choice',options:q.options,correctOption:q.correctOption,explanation:q.explanation,position:i+1,createdAt:t,updatedAt:t}));
@@ -2007,7 +2031,8 @@ export const handleRequest=async (req,res)=>{
       const assessments=db.assessments.filter(a=>a.scopeType==='lesson'&&lessonIds.has(a.scopeId));
       const assessmentIds=new Set(assessments.map(a=>a.id));
       const resources=lessons.flatMap(l=>(l.resources||[]).filter(r=>r.generatedKey?.startsWith('piel-perfecta:')));
-      return json(res,200,{title:course.title,status:course.status,saleEnabled:course.saleEnabled,moduleCount:modules.length,lessonCount:lessons.length,generatedResources:resources.length,assessmentCount:assessments.length,questionCount:db.questions.filter(q=>assessmentIds.has(q.assessmentId)).length,assessmentStatuses:[...new Set(assessments.map(a=>a.status))]});
+      const finalProject=assessments.find(a=>a.title==='Proyecto final · Tu Rutina Maestra')||null;
+      return json(res,200,{title:course.title,status:course.status,saleEnabled:course.saleEnabled,sequentialAccess:course.sequentialAccess===true,moduleCount:modules.length,lessonCount:lessons.length,generatedResources:resources.length,assessmentCount:assessments.length,questionCount:db.questions.filter(q=>assessmentIds.has(q.assessmentId)).length,assessmentStatuses:[...new Set(assessments.map(a=>a.status))],finalProject:finalProject?{status:finalProject.status,passingScore:finalProject.passingScore,maxAttempts:finalProject.maxAttempts,questionCount:db.questions.filter(q=>q.assessmentId===finalProject.id).length}:null,tutorApprovedLessons:lessons.filter(l=>l.tutorApproved===true&&String(l.tutorContent||'').trim().length>0).length});
     }
     if(url.pathname==='/api/checkout/create' && req.method==='POST'){
       if(PAYMENT_PROVIDER!=='stripe'&&IS_PROD)return json(res,503,{error:'Pasarela de pago no configurada'});
