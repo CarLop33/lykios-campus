@@ -2591,6 +2591,39 @@ export const handleRequest=async (req,res)=>{
       };
       return json(res,Object.values(checks).every(Boolean)?200:500,{ok:Object.values(checks).every(Boolean),checks,activeSessions:active.length,securityEvents:fake.securityEvents.map(e=>({type:e.type,score:e.score}))});
     }
+    if(IS_PREVIEW && url.pathname==='/api/public/blob-usage-check' && req.method==='GET'){
+      if(FILE_BACKEND!=='blob')return json(res,200,{blob:false,fileBackend:FILE_BACKEND});
+      try{
+        const {list}=await import('@vercel/blob');
+        let cursor,hasMore=true,totalBytes=0,totalFiles=0,pages=0;
+        const categories={videos:{files:0,bytes:0},backups:{files:0,bytes:0},other:{files:0,bytes:0}};
+        while(hasMore&&pages<100){
+          const page=await list({cursor,limit:1000});
+          pages++;
+          for(const blob of page.blobs||[]){
+            const size=Math.max(0,Number(blob.size)||0);
+            totalFiles++;totalBytes+=size;
+            const p=String(blob.pathname||'');
+            const bucket=p.startsWith('videos/')?'videos':p.startsWith('backups/')?'backups':'other';
+            categories[bucket].files++;categories[bucket].bytes+=size;
+          }
+          hasMore=Boolean(page.hasMore&&page.cursor);
+          cursor=page.cursor;
+        }
+        return json(res,200,{
+          blob:true,
+          privateStore:true,
+          totalFiles,totalBytes,
+          totalGiB:Number((totalBytes/1073741824).toFixed(3)),
+          totalGB:Number((totalBytes/1000000000).toFixed(3)),
+          categories:Object.fromEntries(Object.entries(categories).map(([k,v])=>[k,{files:v.files,bytes:v.bytes,GiB:Number((v.bytes/1073741824).toFixed(3))}])),
+          pages,
+          truncated:hasMore
+        });
+      }catch(error){
+        return json(res,500,{error:'No se pudo calcular el uso del Blob',detail:cleanText(error?.message||'',300)});
+      }
+    }
     if(IS_PREVIEW && url.pathname==='/api/public/video-protection-check' && req.method==='GET'){
       return json(res,200,{
         privateStorage:FILE_BACKEND==='blob',
