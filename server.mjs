@@ -2074,7 +2074,7 @@ function mime(file){
 }
 async function serveStatic(req,res){
   let p=new URL(req.url,'http://localhost').pathname;
-  if(p==='/'||['/login','/dashboard','/courses','/course','/lesson','/profile','/admin'].includes(p)) p='/index.html';
+  if(p==='/'||['/login','/dashboard','/courses','/course','/lesson','/profile','/admin','/store'].includes(p)) p='/index.html';
   const file=path.normalize(path.join(PUBLIC_DIR,p));
   if(!file.startsWith(PUBLIC_DIR)) return false;
   try { const s=await stat(file); if(!s.isFile()) return false; text(res,200,await readFile(file),mime(file)); return true; } catch { return false; }
