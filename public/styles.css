@@ -325,3 +325,75 @@
 }
 .video-shell:-webkit-full-screen .video-overlay{z-index:10}
 .video-shell:-webkit-full-screen .video-watermark{z-index:11}
+
+
+/* v0.22 · Marca de agua fija, discreta y superior derecha */
+.video-watermark{
+  position:absolute !important;
+  top:52px !important;
+  right:18px !important;
+  left:auto !important;
+  transform:none !important;
+  z-index:8 !important;
+  max-width:min(30%,260px) !important;
+  padding:5px 8px !important;
+  border:1px solid rgba(255,255,255,.08) !important;
+  border-radius:8px !important;
+  background:rgba(3,31,36,.08) !important;
+  color:rgba(255,255,255,.42) !important;
+  text-shadow:0 1px 2px rgba(0,0,0,.22) !important;
+  box-shadow:none !important;
+  backdrop-filter:none !important;
+  opacity:.48 !important;
+  pointer-events:none !important;
+  user-select:none !important;
+  -webkit-user-select:none !important;
+  transition:none !important;
+  line-height:1.08 !important;
+}
+.video-watermark.active{opacity:.48 !important}
+.video-watermark span{
+  display:block;
+  margin-bottom:2px;
+  font-size:7px !important;
+  font-weight:700;
+  letter-spacing:.14em;
+  opacity:.46 !important;
+}
+.video-watermark b{
+  display:block;
+  font-size:10px !important;
+  font-weight:700;
+  opacity:.58 !important;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.video-watermark small{
+  display:block;
+  margin-top:1px;
+  font-size:8px !important;
+  opacity:.50 !important;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.video-shell:fullscreen .video-watermark,
+.video-shell:-webkit-full-screen .video-watermark{
+  top:58px !important;
+  right:22px !important;
+  left:auto !important;
+  transform:none !important;
+  opacity:.48 !important;
+}
+@media(max-width:640px){
+  .video-watermark{
+    top:48px !important;
+    right:10px !important;
+    max-width:42% !important;
+    padding:4px 6px !important;
+  }
+  .video-watermark b{font-size:9px !important}
+  .video-watermark small{font-size:7px !important}
+  .video-watermark span{font-size:6px !important}
+}
