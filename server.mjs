@@ -1245,8 +1245,12 @@ function pricingFor(db,targetType,target){
   return {baseCents:base,promo,discountCents:promoDiscount,finalCents:Math.max(0,base-promoDiscount)};
 }
 function bundleCourses(db,bundle){return (bundle.courseIds||[]).map(id=>db.courses.find(c=>c.id===id)).filter(Boolean)}
+function courseHasPublishedContent(db,courseId){
+  const publishedModuleIds=db.modules.filter(m=>m.courseId===courseId&&m.status==='published').map(m=>m.id);
+  return db.lessons.some(l=>l.courseId===courseId&&l.status==='published'&&publishedModuleIds.includes(l.moduleId));
+}
 function catalogPayload(db){
-  const courses=db.courses.filter(c=>c.status==='published'&&c.saleEnabled!==false).map(c=>{const pr=pricingFor(db,'course',c);return {type:'course',id:c.id,slug:c.slug,title:c.title,subtitle:c.subtitle||'',description:c.description||'',priceCents:pr.finalCents,basePriceCents:pr.baseCents,currency:c.currency||'EUR',priceLabel:money(pr.finalCents,c.currency||'EUR'),basePriceLabel:money(pr.baseCents,c.currency||'EUR'),promotion:pr.promo?{id:pr.promo.id,name:pr.promo.name,badge:pr.promo.badge||'Oferta'}:null};});
+  const courses=db.courses.filter(c=>c.status==='published'&&c.saleEnabled!==false&&courseHasPublishedContent(db,c.id)).map(c=>{const pr=pricingFor(db,'course',c);return {type:'course',id:c.id,slug:c.slug,title:c.title,subtitle:c.subtitle||'',description:c.description||'',priceCents:pr.finalCents,basePriceCents:pr.baseCents,currency:c.currency||'EUR',priceLabel:money(pr.finalCents,c.currency||'EUR'),basePriceLabel:money(pr.baseCents,c.currency||'EUR'),promotion:pr.promo?{id:pr.promo.id,name:pr.promo.name,badge:pr.promo.badge||'Oferta'}:null};});
   const bundles=(db.bundles||[]).filter(b=>b.status==='published'&&b.saleEnabled!==false).map(b=>{const pr=pricingFor(db,'bundle',b);const cs=bundleCourses(db,b);return {type:'bundle',id:b.id,slug:b.slug,title:b.title,subtitle:b.subtitle||'',description:b.description||'',courseIds:b.courseIds||[],courseTitles:cs.map(c=>c.title),priceCents:pr.finalCents,basePriceCents:pr.baseCents,currency:b.currency||'EUR',priceLabel:money(pr.finalCents,b.currency||'EUR'),basePriceLabel:money(pr.baseCents,b.currency||'EUR'),promotion:pr.promo?{id:pr.promo.id,name:pr.promo.name,badge:pr.promo.badge||'Oferta'}:null};});
   return {courses,bundles,checkoutProvider:PAYMENT_PROVIDER==='stripe'?'stripe':'mock'};
 }
@@ -1276,6 +1280,7 @@ function checkoutMock(db,body,{suppressEmails=false}={}){
   const courseIds=itemType==='bundle'?(target.courseIds||[]):[target.id];
   const validCourses=courseIds.map(id=>db.courses.find(c=>c.id===id&&c.status==='published')).filter(Boolean);
   if(!validCourses.length)return {error:'No hay cursos disponibles en este producto',status:409};
+  if(validCourses.some(c=>!courseHasPublishedContent(db,c.id)))return {error:'Este curso todavía está en preparación y no admite nuevas matrículas',status:409};
   const activeOwned=new Set(db.enrollments.filter(e=>e.userId===user.id&&e.status==='active').map(e=>e.courseId));
   const missingCourses=validCourses.filter(c=>!activeOwned.has(c.id));
   if(!missingCourses.length)return {error:'Este usuario ya tiene acceso a todo el contenido incluido',status:409};
