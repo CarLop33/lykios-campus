@@ -2594,6 +2594,7 @@ export const handleRequest=async (req,res)=>{
     if(IS_PREVIEW && url.pathname==='/api/public/blob-usage-check' && req.method==='GET'){
       if(FILE_BACKEND!=='blob')return json(res,200,{blob:false,fileBackend:FILE_BACKEND});
       try{
+        const {list}=await import('@vercel/blob');
         const db=await readDb();
         const referenced=new Set();
         const pielVideoRefs=new Set();
