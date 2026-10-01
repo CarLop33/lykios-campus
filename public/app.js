@@ -591,7 +591,7 @@ async function putBunnyTusWithProgress(prep,file,onProgress){
         await new Promise(resolve=>setTimeout(resolve,1000*Math.min(8,2**attempt)));
         try{offset=await bunnyTusOffset(uploadUrl,prep)}catch{}
         if(offset>=end){success=true;break}
-        if(offset!==start)break;
+        if(offset!==start){success=true;break}
       }
     }
     if(!success)throw lastError||new Error('No se pudo continuar la carga a Bunny');
@@ -607,6 +607,18 @@ async function cancelPreparedVideo(prep){
   if(!prep?.ticket||prep.provider!=='bunny')return;
   try{await api('/api/admin/video/cancel',{method:'POST',body:JSON.stringify({ticket:prep.ticket})})}catch{}
 }
+async function completePreparedVideo(prep){
+  let lastError=null;
+  for(let attempt=0;attempt<4;attempt++){
+    try{return await api('/api/admin/video/complete',{method:'POST',body:JSON.stringify({ticket:prep.ticket})})}
+    catch(error){
+      lastError=error;
+      if(attempt>=3)break;
+      await new Promise(resolve=>setTimeout(resolve,800*(attempt+1)));
+    }
+  }
+  throw lastError||new Error('No se pudo registrar el vídeo');
+}
 async function uploadTestVideo(lessonId,input,mode='add',videoId=''){
   const file=input.files?.[0];if(!file)return;
   if(!['video/mp4','video/webm','video/quicktime'].includes(file.type)){toast('Usa un vídeo MP4, WebM o MOV','error');input.value='';return}
@@ -618,7 +630,7 @@ async function uploadTestVideo(lessonId,input,mode='add',videoId=''){
     let shown=-20;
     await uploadPreparedVideo(prep,file,p=>{if(p>=shown+10||p===100){shown=p;toast((prep.provider==='bunny'?'Subiendo a Bunny… ':'Subiendo vídeo… ')+p+'%')}});
     uploaded=true;
-    const result=await api('/api/admin/video/complete',{method:'POST',body:JSON.stringify({ticket:prep.ticket})});
+    const result=await completePreparedVideo(prep);
     toast(result.processing?'Vídeo subido. Bunny lo está procesando…':(mode==='replace'?'Vídeo reemplazado':'Vídeo añadido a la clase'));
     await renderAdmin();
   }catch(e){
@@ -648,7 +660,7 @@ async function uploadVideoFileDirect(lesson,file){
     let shown=-20;
     await uploadPreparedVideo(prep,file,p=>{if(p>=shown+10||p===100){shown=p;toast('Subiendo '+lesson.code+' a '+(prep.provider==='bunny'?'Bunny':'almacenamiento')+' · '+p+'%')}});
     uploaded=true;
-    return await api('/api/admin/video/complete',{method:'POST',body:JSON.stringify({ticket:prep.ticket})});
+    return await completePreparedVideo(prep);
   }catch(error){
     if(prep&&!uploaded)await cancelPreparedVideo(prep);
     throw error;
