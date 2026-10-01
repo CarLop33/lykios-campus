@@ -413,3 +413,21 @@
   height:auto !important;
   overflow:visible !important;
 }
+
+
+/* v0.24 · Bunny Stream player */
+.bunny-player{
+  display:block;
+  width:100%;
+  aspect-ratio:16/9;
+  border:0;
+  background:#041f25;
+}
+.video-shell:fullscreen .bunny-player,
+.video-shell:-webkit-full-screen .bunny-player{
+  width:100vw;
+  height:100vh;
+  max-height:100vh;
+  aspect-ratio:auto;
+  border:0;
+}
