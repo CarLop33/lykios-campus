@@ -15,7 +15,15 @@ let state={me:null,teacherContent:null,teacherSummary:null,teacherStudents:[],te
 let videoProgressQueue=Promise.resolve();
 let activeLessonVideo=null;
 function queueVideoProgress(task){const run=videoProgressQueue.then(task,task);videoProgressQueue=run.catch(()=>{});return run}
-function pauseOtherLessonVideos(current){$('video[id^="lessonVideo_"]').forEach(v=>{if(v!==current&&!v.paused)v.pause()})}
+function pauseOtherLessonVideos(current){
+  if(activeLessonVideo?.element&&activeLessonVideo.element!==current){
+    try{
+      if(activeLessonVideo.player&&typeof activeLessonVideo.player.pause==='function')activeLessonVideo.player.pause();
+      else if(typeof activeLessonVideo.element.pause==='function'&&!activeLessonVideo.element.paused)activeLessonVideo.element.pause();
+    }catch{}
+  }
+  $('video[id^="lessonVideo_"]').forEach(v=>{if(v!==current&&!v.paused)v.pause()});
+}
 
 function toast(msg,type='ok'){const t=document.createElement('div');t.className='toast '+type;t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),2600)}
 function setRoute(view){history.pushState({},'',view==='login'?'/login':'/'+view);render(view)}
@@ -99,13 +107,99 @@ async function toggleVideoShellFullscreen(video,index){
   }catch(error){toast('No se pudo activar la pantalla completa','error')}
 }
 function toggleVideoFullscreenByIndex(index){
-  const video=$('#lessonVideo_'+index);
-  if(video)toggleVideoShellFullscreen(video,index);
+  const media=$('#lessonVideo_'+index);
+  if(media)toggleVideoShellFullscreen(media,index);
 }
 
 function renderLesson(){const l=state.currentLesson||state.course?.modules.flatMap(m=>m.lessons).find(x=>x.code==='2.9')||state.course?.modules.flatMap(m=>m.lessons)[0];if(!l)return setRoute('course');const cs=l.completionStatus||{hasRequirements:false,completed:state.course.completedLessonIds.includes(l.id),videosRequired:0,videosCompleted:0,assessmentRequired:false,assessmentPassed:true,progressPercent:0};const done=Boolean(cs.completed||state.course.completedLessonIds.includes(l.id));const assessment=l.assessment;const vp=l.videoProgress||{percent:0,currentTime:0};const videos=lessonVideoList(l);const wmIdentity=videoWatermarkIdentity();const videoBlocks=videos.length?videos.map((video,i)=>`<div class="video-shell"><video id="lessonVideo_${i}" class="video-player" controls controlslist="nodownload nofullscreen noremoteplayback" disablepictureinpicture disableremoteplayback playsinline preload="metadata" referrerpolicy="no-referrer"></video><div id="videoWatermark_${i}" class="video-watermark" aria-hidden="true"><span>USO PERSONAL</span><b>${esc(wmIdentity.name)}</b><small>${esc(wmIdentity.email)}</small></div><div class="video-overlay"><span>LYKIOS ACADEMY · VÍDEO ${i+1} · ACCESO PERSONAL</span><span class="video-overlay-actions"><span id="videoProgressText_${i}">${video.progress?.percent||0}% visto</span><button id="videoFullscreen_${i}" class="video-fullscreen-btn" type="button" aria-label="Pantalla completa" onclick="toggleVideoFullscreenByIndex(${i})">⛶</button></span></div></div>`).join(''):`<div class="video-shell"><div class="video video-empty"><div><div class="play-orb">▶</div><p>Vídeo pendiente de publicación</p></div></div></div>`;const reqText=cs.hasRequirements?`${cs.videosRequired?`${cs.videosCompleted||0}/${cs.videosRequired} vídeos completados`:''}${cs.videosRequired&&cs.assessmentRequired?' · ':''}${cs.assessmentRequired?(cs.assessmentPassed?'evaluación aprobada':'evaluación pendiente'):''}`:'';const completionButton=cs.hasRequirements?`<button id="lessonCompletionButton" class="btn ${done?'gold':''}" disabled>${done?'✓ Clase completada':'Completa los requisitos'}</button>`:`<button id="lessonCompletionButton" class="btn ${done?'gold':''}" onclick="completeLesson('${l.id}')">${done?'✓ Completada':'Marcar como completada'}</button>`;document.body.innerHTML=shell(`<div class="lesson-view"><div class="card lesson-nav"><div class="nav-title">Contenido del curso</div>${state.course.modules.map(m=>`<div class="lesson-group"><b>${esc(String(m.title||'').startsWith('Módulo ')?m.title:(m.code+' · '+m.title))}</b>${m.lessons.map(x=>`<div class="lesson-link ${x.id===l.id?'current':''} ${x.locked?'locked':''}" ${x.locked?'title="'+esc(x.lockReason||'Clase bloqueada')+'"':`onclick="openLesson('${x.id}')"`}>${state.course.completedLessonIds.includes(x.id)?'✓':x.locked?'🔒':'○'} ${esc(x.code)} ${esc(x.title)}</div>`).join('')}</div>`).join('')}</div><div><div class="lesson-videos">${videoBlocks}</div><div class="card lesson-main"><div class="muted">Clase ${esc(l.code)} · ${l.durationMinutes||0} min</div><h1>${esc(l.title)}</h1><p>${esc(l.summary||'Lección clínica Lykios Academy. Aquí se integrará el vídeo definitivo, los descargables y la evaluación cuando corresponda.')}</p>${videos.length?`<div class="video-metric"><span>Progreso de vídeo${videos.length>1?'s':''}</span><div class="progress-track"><i id="lessonVideoProgressBar" style="width:${vp.percent||0}%"></i></div><b id="lessonVideoProgressValue">${vp.percent||0}%</b></div>`:''}${cs.hasRequirements?`<div class="muted" id="lessonRequirementText" style="margin:10px 0 14px">Finalización automática · ${esc(reqText)}</div>`:''}<div class="resource-bar">${completionButton}${(l.resources||[]).map(r=>`<a class="resource-chip" target="_blank" href="/api/resource?id=${r.id}">↗ ${esc(r.name)}</a>`).join('')||'<span class="muted">Sin recursos adjuntos todavía.</span>'}</div></div>${assessment?`<div class="card assessment-card"><div><div class="page-kicker">EVALUACIÓN</div><h2>${esc(assessment.title)}</h2><p class="muted">Nota mínima ${assessment.passingScore}% · ${assessment.maxAttempts?assessment.maxAttempts+' intentos máximos':'intentos ilimitados'}${assessment.passed?' · ✓ aprobada':''}</p></div><button class="btn" onclick="openAssessment('${assessment.id}')">${assessment.passed?'Revisar evaluación':'Realizar evaluación'}</button></div>`:''}${renderTutorCard()}</div></div>`,'courses');const tf=$('#tutorForm');if(tf)tf.onsubmit=askTutor;videos.forEach((video,i)=>initLessonVideo(l,video,i))}
 function updateLessonCompletionUi(lesson,completion,videoProgress){if(!completion)return;lesson.completionStatus={...(lesson.completionStatus||{}),...completion};if(videoProgress){lesson.videoProgress=videoProgress;const bar=$('#lessonVideoProgressBar');const value=$('#lessonVideoProgressValue');if(bar)bar.style.width=(videoProgress.percent||0)+'%';if(value)value.textContent=(videoProgress.percent||0)+'%'}const btn=$('#lessonCompletionButton');if(btn){btn.textContent=completion.completed?'✓ Clase completada':'Completa los requisitos';btn.classList.toggle('gold',Boolean(completion.completed))}const req=$('#lessonRequirementText');if(req){const parts=[];if(completion.videosRequired)parts.push(`${completion.videosCompleted||0}/${completion.videosRequired} vídeos completados`);if(completion.assessmentRequired)parts.push(completion.assessmentPassed?'evaluación aprobada':'evaluación pendiente');req.textContent='Finalización automática · '+parts.join(' · ')}if(completion.completed&&!state.course.completedLessonIds.includes(lesson.id))state.course.completedLessonIds.push(lesson.id);if(!completion.completed)state.course.completedLessonIds=state.course.completedLessonIds.filter(id=>id!==lesson.id)}
-async function initLessonVideo(lesson,video,index=0){try{const s=await api('/api/video/session',{method:'POST',body:JSON.stringify({lessonId:lesson.id,videoId:video.id})});const v=$(`#lessonVideo_${index}`);if(!v)return;try{v.controlsList?.add('nodownload');v.controlsList?.add('nofullscreen');v.controlsList?.add('noremoteplayback')}catch{}v.disablePictureInPicture=true;v.disableRemotePlayback=true;v.addEventListener('contextmenu',e=>e.preventDefault());v.setAttribute('draggable','false');const wm=$(`#videoWatermark_${index}`);moveVideoWatermark(wm,index);if(wm)wm.classList.add('active');v.src=s.streamUrl;const resume=Math.max(0,Number(s.progress?.currentTime)||0);v.addEventListener('loadedmetadata',()=>{if(resume>5&&resume<v.duration-5)v.currentTime=resume});v.addEventListener('play',()=>{pauseOtherLessonVideos(v);activeLessonVideo={lessonId:lesson.id,videoId:video.id,element:v};startVideoWatermark(v,index)});let lastSent=0;const sync=async(force=false)=>{if(!v.duration||(!force&&Date.now()-lastSent<5000))return;lastSent=Date.now();const payload={lessonId:lesson.id,videoId:video.id,currentTime:v.currentTime,duration:v.duration,playing:!v.paused&&!v.ended};try{const r=await queueVideoProgress(()=>api('/api/video/progress',{method:'POST',body:JSON.stringify(payload)}));const p=r.progress?.percent||0;const label=$(`#videoProgressText_${index}`);if(label)label.textContent=p+'% visto';video.progress=r.progress||video.progress;updateLessonCompletionUi(lesson,r.lessonCompletion,r.lessonVideoProgress)}catch(err){const msg=String(err?.message||'');if(/simultánea|otro dispositivo/i.test(msg)){if(!v.paused)v.pause();toast(msg,'error')}}};v.addEventListener('timeupdate',()=>sync(false));v.addEventListener('pause',()=>{stopVideoWatermark(v,index);sync(true)});v.addEventListener('ended',()=>{stopVideoWatermark(v,index);sync(true)})}catch(err){toast(err.message,'error')}}
+function updateVideoProgressFromPlayback(lesson,video,index,progress,lessonCompletion,lessonVideoProgress){
+  const p=progress?.percent||0;
+  const label=$(`#videoProgressText_${index}`);if(label)label.textContent=p+'% visto';
+  video.progress=progress||video.progress;
+  updateLessonCompletionUi(lesson,lessonCompletion,lessonVideoProgress);
+}
+async function initBunnyLessonVideo(lesson,video,index,session){
+  const original=$(`#lessonVideo_${index}`);if(!original)return;
+  const frame=document.createElement('iframe');
+  frame.id=original.id;
+  frame.className='video-player bunny-player';
+  frame.src=session.embedUrl;
+  frame.title=video.name||('Vídeo '+(index+1));
+  frame.loading='eager';
+  frame.referrerPolicy='strict-origin-when-cross-origin';
+  frame.setAttribute('allow','autoplay; encrypted-media');
+  frame.setAttribute('tabindex','0');
+  original.replaceWith(frame);
+  const wm=$(`#videoWatermark_${index}`);moveVideoWatermark(wm);if(wm)wm.classList.add('active');
+  if(!window.playerjs?.Player)throw new Error('El reproductor Bunny no se ha cargado. Recarga la página.');
+  const player=new window.playerjs.Player(frame);
+  const resume=Math.max(0,Number(session.progress?.currentTime)||0);
+  let currentTime=0,duration=0,lastSent=0,ready=false;
+  const parseTiming=data=>{
+    if(typeof data==='string'){try{data=JSON.parse(data)}catch{return}}
+    if(!data||typeof data!=='object')return;
+    currentTime=Math.max(0,Number(data.seconds??data.currentTime??0)||0);
+    duration=Math.max(0,Number(data.duration??0)||0);
+    if(activeLessonVideo?.element===frame){activeLessonVideo.currentTime=currentTime;activeLessonVideo.duration=duration}
+  };
+  const sync=async(force=false,playing=true)=>{
+    if(!duration||(!force&&Date.now()-lastSent<5000))return;
+    lastSent=Date.now();
+    const payload={lessonId:lesson.id,videoId:video.id,currentTime,duration,playing};
+    try{
+      const r=await queueVideoProgress(()=>api('/api/video/progress',{method:'POST',body:JSON.stringify(payload)}));
+      updateVideoProgressFromPlayback(lesson,video,index,r.progress,r.lessonCompletion,r.lessonVideoProgress);
+    }catch(err){
+      const msg=String(err?.message||'');
+      if(/simultánea|otro dispositivo/i.test(msg)){try{player.pause()}catch{};toast(msg,'error')}
+    }
+  };
+  player.on('ready',()=>{
+    ready=true;
+    if(resume>5){try{player.setCurrentTime(resume)}catch{}}
+  });
+  player.on('play',()=>{
+    pauseOtherLessonVideos(frame);
+    activeLessonVideo={lessonId:lesson.id,videoId:video.id,element:frame,player,type:'bunny',currentTime,duration};
+    startVideoWatermark(frame,index);
+  });
+  player.on('timeupdate',data=>{parseTiming(data);sync(false,true)});
+  player.on('pause',()=>{stopVideoWatermark(frame,index);sync(true,false)});
+  player.on('ended',()=>{stopVideoWatermark(frame,index);sync(true,false)});
+  setTimeout(()=>{if(!ready)console.warn('Bunny Player.js todavía no confirmó ready')},8000);
+}
+async function initLessonVideo(lesson,video,index=0){
+  try{
+    const session=await api('/api/video/session',{method:'POST',body:JSON.stringify({lessonId:lesson.id,videoId:video.id})});
+    if(session.provider==='bunny'&&session.embedUrl)return initBunnyLessonVideo(lesson,video,index,session);
+    const v=$(`#lessonVideo_${index}`);if(!v)return;
+    try{v.controlsList?.add('nodownload');v.controlsList?.add('nofullscreen');v.controlsList?.add('noremoteplayback')}catch{}
+    v.disablePictureInPicture=true;v.disableRemotePlayback=true;
+    v.addEventListener('contextmenu',e=>e.preventDefault());v.setAttribute('draggable','false');
+    const wm=$(`#videoWatermark_${index}`);moveVideoWatermark(wm);if(wm)wm.classList.add('active');
+    v.src=session.streamUrl;
+    const resume=Math.max(0,Number(session.progress?.currentTime)||0);
+    v.addEventListener('loadedmetadata',()=>{if(resume>5&&resume<v.duration-5)v.currentTime=resume});
+    v.addEventListener('play',()=>{pauseOtherLessonVideos(v);activeLessonVideo={lessonId:lesson.id,videoId:video.id,element:v,type:'native',currentTime:v.currentTime,duration:v.duration};startVideoWatermark(v,index)});
+    let lastSent=0;
+    const sync=async(force=false)=>{
+      if(!v.duration||(!force&&Date.now()-lastSent<5000))return;
+      lastSent=Date.now();
+      if(activeLessonVideo?.element===v){activeLessonVideo.currentTime=v.currentTime;activeLessonVideo.duration=v.duration}
+      const payload={lessonId:lesson.id,videoId:video.id,currentTime:v.currentTime,duration:v.duration,playing:!v.paused&&!v.ended};
+      try{
+        const r=await queueVideoProgress(()=>api('/api/video/progress',{method:'POST',body:JSON.stringify(payload)}));
+        updateVideoProgressFromPlayback(lesson,video,index,r.progress,r.lessonCompletion,r.lessonVideoProgress);
+      }catch(err){
+        const msg=String(err?.message||'');if(/simultánea|otro dispositivo/i.test(msg)){if(!v.paused)v.pause();toast(msg,'error')}
+      }
+    };
+    v.addEventListener('timeupdate',()=>sync(false));
+    v.addEventListener('pause',()=>{stopVideoWatermark(v,index);sync(true)});
+    v.addEventListener('ended',()=>{stopVideoWatermark(v,index);sync(true)});
+  }catch(err){toast(err.message,'error')}
+}
 async function completeLesson(id){const result=await api('/api/progress',{method:'POST',body:JSON.stringify({lessonId:id,completed:true})});state.course=result.course;await loadDashboard();toast('Clase completada y progreso guardado');renderLesson()}
 async function openAssessment(id){try{state.currentAssessment=await api(`/api/assessment?id=${id}`);state.assessmentResult=null;setRoute('assessment')}catch(e){toast(e.message,'error')}}
 function renderAssessment(){const a=state.currentAssessment;if(!a)return setRoute('course');if(state.assessmentResult)return renderAssessmentResult();const attemptsLabel=a.maxAttempts?`${a.attemptsUsed}/${a.maxAttempts} intentos usados`:`${a.attemptsUsed} intentos usados`;if(a.passed){document.body.innerHTML=shell(`<div class="assessment-result passed"><div class="result-ring"><span>${a.bestScore||0}%</span></div><div class="page-kicker">EVALUACIÓN SUPERADA</div><h1>Evaluación ya aprobada</h1><p>Tu mejor resultado es <b>${a.bestScore||0}%</b>. No necesitas repetirla.</p><div class="result-actions"><button class="btn" onclick="setRoute('lesson')">Volver a la clase</button></div></div>`,'courses');return}if(a.maxAttempts>0&&a.attemptsUsed>=a.maxAttempts){document.body.innerHTML=shell(`<div class="assessment-result failed"><div class="result-ring"><span>${a.bestScore||0}%</span></div><div class="page-kicker">INTENTOS AGOTADOS</div><h1>Evaluación no superada</h1><p>Has utilizado los ${a.maxAttempts} intentos disponibles. Tu mejor resultado fue ${a.bestScore||0}%.</p><div class="result-actions"><button class="btn" onclick="setRoute('lesson')">Volver a la clase</button></div></div>`,'courses');return}document.body.innerHTML=shell(`<div class="assessment-wrap"><div class="assessment-head"><div><div class="page-kicker">EVALUACIÓN LYKIOS</div><h1>${esc(a.title)}</h1><p>${esc(a.instructions||'Selecciona una respuesta en cada pregunta y envía la evaluación cuando hayas terminado.')}</p><div class="assessment-meta"><span>Nota mínima ${a.passingScore}%</span><span>${attemptsLabel}</span>${a.bestScore!==null?`<span>Mejor nota ${a.bestScore}%</span>`:''}</div></div><button class="btn-secondary" onclick="setRoute('lesson')">Volver a la clase</button></div><form id="assessmentForm" class="assessment-form">${a.questions.map((q,i)=>`<section class="card question-card"><div class="question-number">Pregunta ${i+1}</div><h3>${esc(q.prompt)}</h3><div class="option-list">${q.options.map((o,j)=>`<label class="answer-option"><input type="radio" name="q_${q.id}" value="${j}" required><span>${esc(o)}</span></label>`).join('')}</div></section>`).join('')}<div class="submit-bar"><div><b>${a.questions.length} preguntas</b><br/><span class="muted">La corrección se realiza en el servidor.</span></div><button class="btn" type="submit">Entregar evaluación</button></div></form></div>`,'courses');$('#assessmentForm').onsubmit=submitAssessment}
@@ -385,7 +479,7 @@ async function sendStudentReminder(userId,courseId){try{await api('/api/admin/em
 function renderAdminOrders(){const items=state.adminCommerce?.orders||[];if(!items.length)return '<div class="empty">Todavía no hay pedidos.</div>';return `<div class="cert-table-head"><span>Pedido</span><span>Alumno</span><span>Curso</span><span>Total</span><span>Estado</span></div>${items.map(o=>`<div class="cert-table-row"><span><b>${esc(o.number)}</b><small>${new Date(o.createdAt).toLocaleString('es-ES')}</small></span><span>${esc(o.studentName)}<small>${esc(o.email)}</small></span><span>${esc(o.courseTitle)}</span><span>${esc(o.totalLabel)}</span><span><span class="cert-valid">${esc(o.status)}</span></span></div>`).join('')}`};
 function renderAdminCertificates(){const items=state.adminCertificates||[];if(!items.length)return '<div class="empty">Todavía no hay certificados emitidos.</div>';return `<div class="cert-table-head"><span>Alumno</span><span>Curso</span><span>Código</span><span>Estado</span><span></span></div>${items.map(c=>`<div class="cert-table-row"><span><b>${esc(c.studentName)}</b><small>${new Date(c.issuedAt).toLocaleDateString('es-ES')}</small></span><span>${esc(c.courseTitle)}</span><span><a target="_blank" href="/verify/${encodeURIComponent(c.code)}">${esc(c.code)}</a></span><span>${c.status==='valid'?'<span class="cert-valid">Válido</span>':'<span class="cert-revoked">Revocado</span>'}</span><span>${c.status==='valid'?`<button class="icon-btn danger-soft" onclick="revokeCertificate('${c.id}')">Revocar</button>`:''}</span></div>`).join('')}`};
 async function revokeCertificate(id){if(!confirm('¿Revocar este certificado? La página pública mostrará que ya no es válido.'))return;try{await api(`/api/admin/certificate/${id}/revoke`,{method:'POST'});toast('Certificado revocado');await renderAdmin()}catch(e){toast(e.message,'error')}}
-function renderAdminCourse(c){const lessonCount=c.modules.flatMap(m=>m.lessons).length;const bulk=c.slug==='piel-perfecta-20'?`<div class="card" style="margin:14px 0;padding:16px"><div class="page-kicker">MIGRACIÓN PIEL PERFECTA</div><div style="display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap"><div><b>Carga masiva de vídeos</b><p class="muted" style="margin:4px 0 0">Selecciona todos los vídeos a la vez. El Campus los asignará por códigos como 0.1, 1.2 o nombres tipo “Módulo 3 Vídeo 2”. Las clases que ya tengan vídeo se omiten para evitar duplicados.</p></div><div style="display:flex;gap:8px;flex-wrap:wrap"><label class="upload-label">⇧ Seleccionar vídeos<input type="file" multiple accept="video/mp4,video/webm,video/quicktime" data-bulk-video-course="${c.id}" hidden></label><button class="btn-secondary" onclick="publishPielPerfectaReady()">✓ Validar y publicar en Preview</button></div></div></div>`:'';return `<section class="admin-course card"><div class="admin-course-head"><div><div class="admin-code">${esc(c.slug)}</div><h2>${esc(c.title)}</h2><p>${esc(c.subtitle||'Sin subtítulo')}</p><div class="catalog-meta">${c.modules.length} módulos · ${lessonCount} clases · ${typeof c.priceCents==='number'?(c.priceCents/100).toLocaleString('es-ES',{style:'currency',currency:c.currency||'EUR'}):''} · ${statusPill(c.status)}</div></div><div class="action-group"><button class="icon-btn" title="Editar curso" onclick="openCourseForm('${c.id}')">✎</button><button class="icon-btn ${c.status==='published'?'danger-soft':'success-soft'}" onclick="toggleCourseStatus('${c.id}')">${c.status==='published'?'Ocultar':'Publicar'}</button><button class="icon-btn danger-soft" title="Eliminar curso" onclick="deleteCourse('${c.id}')">Eliminar</button></div></div>${bulk}
+function renderAdminCourse(c){const lessonCount=c.modules.flatMap(m=>m.lessons).length;const bulk=c.slug==='piel-perfecta-20'?`<div class="card" style="margin:14px 0;padding:16px"><div class="page-kicker">MIGRACIÓN PIEL PERFECTA</div><div style="display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap"><div><b>Carga masiva de vídeos</b><p class="muted" style="margin:4px 0 0">Selecciona todos los vídeos a la vez. El Campus los asignará por códigos como 0.1, 1.2 o nombres tipo “Módulo 3 Vídeo 2”. Los vídeos nuevos van directamente a Bunny Stream. Las clases que ya tengan vídeo se omiten para evitar duplicados.</p></div><div style="display:flex;gap:8px;flex-wrap:wrap"><label class="upload-label">⇧ Seleccionar vídeos<input type="file" multiple accept="video/mp4,video/webm,video/quicktime" data-bulk-video-course="${c.id}" hidden></label><button class="btn-secondary" onclick="publishPielPerfectaReady()">✓ Validar y publicar en Preview</button></div></div></div>`:'';return `<section class="admin-course card"><div class="admin-course-head"><div><div class="admin-code">${esc(c.slug)}</div><h2>${esc(c.title)}</h2><p>${esc(c.subtitle||'Sin subtítulo')}</p><div class="catalog-meta">${c.modules.length} módulos · ${lessonCount} clases · ${typeof c.priceCents==='number'?(c.priceCents/100).toLocaleString('es-ES',{style:'currency',currency:c.currency||'EUR'}):''} · ${statusPill(c.status)}</div></div><div class="action-group"><button class="icon-btn" title="Editar curso" onclick="openCourseForm('${c.id}')">✎</button><button class="icon-btn ${c.status==='published'?'danger-soft':'success-soft'}" onclick="toggleCourseStatus('${c.id}')">${c.status==='published'?'Ocultar':'Publicar'}</button><button class="icon-btn danger-soft" title="Eliminar curso" onclick="deleteCourse('${c.id}')">Eliminar</button></div></div>${bulk}
 <div class="module-stack">${c.modules.map(m=>renderAdminModule(c,m)).join('')}<button class="add-row" onclick="openModuleForm('${c.id}')">＋ Añadir módulo</button></div></section>`}
 function renderAdminModule(c,m){return `<div class="admin-module"><div class="admin-module-head"><div><span class="module-code">${esc(m.code)}</span><b>${esc(m.title)}</b> ${statusPill(m.status)} ${m.assessment?`<span class="assessment-badge">Test ${m.assessment.status==='published'?'publicado':'borrador'}</span>`:''}</div><div class="mini-actions"><button onclick="openAssessmentForm('module','${m.id}')">${m.assessment?'Evaluación':'＋ Evaluación'}</button><button onclick="openModuleForm('${c.id}','${m.id}')">Editar</button><button onclick="toggleModuleStatus('${m.id}')">${m.status==='published'?'Despublicar':'Publicar'}</button><button class="danger-text" onclick="deleteModule('${m.id}')">Eliminar</button></div></div><div class="admin-lessons">${m.lessons.map(l=>renderAdminLesson(l)).join('')}<button class="add-lesson" onclick="openLessonForm('${m.id}')">＋ Nueva clase</button></div></div>`}
 function renderAdminLesson(l){const videos=lessonVideoList(l);return `<div class="admin-lesson"><div class="lesson-index">${esc(l.code)}</div><div class="lesson-info"><b>${esc(l.title)}</b><div class="lesson-meta">${l.durationMinutes} min · ${statusPill(l.status)} · ${(l.resources||[]).length} recursos · ${videos.length} vídeo${videos.length===1?'':'s'} ${l.assessment?`· <span class="assessment-badge">Test ${l.assessment.status==='published'?'publicado':'borrador'}</span>`:''}</div>${(l.resources||[]).length?`<div class="resource-list">${l.resources.map(r=>`<span class="resource-mini"><a target="_blank" href="/api/resource?id=${r.id}">${esc(r.name)}</a><button onclick="deleteResource('${r.id}')">×</button></span>`).join('')}</div>`:''}${videos.length?`<div class="resource-list">${videos.map((v,i)=>`<span class="resource-mini">🎬 Vídeo ${i+1}: ${esc(v.name||('Vídeo '+(i+1)))} <button onclick="deleteTestVideo('${l.id}','${v.id}')">×</button></span>`).join('')}</div>`:''}</div><div class="lesson-actions">${videos.length?`<label class="upload-label">↻ Reemplazar vídeo 1<input type="file" accept="video/mp4,video/webm,video/quicktime" data-video-action="replace" data-lesson-id="${l.id}" data-video-id="${videos[0].id}" hidden></label>`:''}<label class="upload-label">＋ Subir vídeo<input type="file" accept="video/mp4,video/webm,video/quicktime" data-video-action="add" data-lesson-id="${l.id}" hidden></label><label class="upload-label">＋ Recurso<input type="file" data-resource-lesson="${l.id}" hidden></label><button onclick="openAssessmentForm('lesson','${l.id}')">${l.assessment?'Evaluación':'＋ Evaluación'}</button><button onclick="openLessonForm('${l.moduleId}','${l.id}')">Editar</button><button onclick="toggleLessonStatus('${l.id}')">${l.status==='published'?'Ocultar':'Publicar'}</button><button class="danger-text" onclick="deleteLesson('${l.id}')">Eliminar</button></div></div>`}
@@ -434,8 +528,104 @@ async function toggleLessonStatus(id){const x=findAdminLesson(id);try{await patc
 async function deleteCourse(id){if(!confirm('¿Eliminar este curso? Esta acción no se puede deshacer.'))return;try{await api(`/api/admin/course/${id}`,{method:'DELETE'});toast('Curso eliminado');await renderAdmin()}catch(e){toast(e.message,'error')}}
 async function deleteModule(id){if(!confirm('¿Eliminar este módulo y todas sus clases?'))return;try{await api(`/api/admin/module/${id}`,{method:'DELETE'});toast('Módulo eliminado');await renderAdmin()}catch(e){toast(e.message,'error')}}
 async function deleteLesson(id){if(!confirm('¿Eliminar esta clase y sus recursos?'))return;try{await api(`/api/admin/lesson/${id}`,{method:'DELETE'});toast('Clase eliminada');await renderAdmin()}catch(e){toast(e.message,'error')}}
-function putFileWithProgress(url,file,onProgress){return new Promise((resolve,reject)=>{const xhr=new XMLHttpRequest();xhr.open('PUT',url,true);if(file.type)xhr.setRequestHeader('Content-Type',file.type);xhr.upload.onprogress=e=>{if(e.lengthComputable&&onProgress)onProgress(Math.round(e.loaded/e.total*100))};xhr.onload=()=>xhr.status>=200&&xhr.status<300?resolve():reject(new Error('Blob respondió '+xhr.status));xhr.onerror=()=>reject(new Error('No se pudo subir el vídeo a Blob'));xhr.send(file)})}
-async function uploadTestVideo(lessonId,input,mode='add',videoId=''){const file=input.files?.[0];if(!file)return;if(!['video/mp4','video/webm','video/quicktime'].includes(file.type)){toast('Usa un vídeo MP4, WebM o MOV','error');input.value='';return}if(file.size>2_000_000_000){toast('Máximo 2 GB por vídeo','error');input.value='';return}try{toast(mode==='replace'?'Preparando sustitución segura…':'Preparando nuevo vídeo…');const prep=await api('/api/admin/video/upload-url',{method:'POST',body:JSON.stringify({lessonId,name:file.name,mime:file.type,size:file.size,mode,videoId})});let shown=-20;await putFileWithProgress(prep.uploadUrl,file,p=>{if(p>=shown+20||p===100){shown=p;toast('Subiendo vídeo… '+p+'%')}});await api('/api/admin/video/complete',{method:'POST',body:JSON.stringify({ticket:prep.ticket})});toast(mode==='replace'?'Vídeo reemplazado':'Vídeo añadido a la clase');await renderAdmin()}catch(e){toast(e.message,'error')}finally{input.value=''}}
+function putFileWithProgress(url,file,onProgress){return new Promise((resolve,reject)=>{const xhr=new XMLHttpRequest();xhr.open('PUT',url,true);if(file.type)xhr.setRequestHeader('Content-Type',file.type);xhr.upload.onprogress=e=>{if(e.lengthComputable&&onProgress)onProgress(Math.round(e.loaded/e.total*100))};xhr.onload=()=>xhr.status>=200&&xhr.status<300?resolve():reject(new Error('Almacenamiento respondió '+xhr.status));xhr.onerror=()=>reject(new Error('No se pudo subir el vídeo'));xhr.send(file)})}
+function bunnyTusBase64(value){
+  const bytes=new TextEncoder().encode(String(value||''));
+  let raw='';for(const b of bytes)raw+=String.fromCharCode(b);
+  return btoa(raw);
+}
+function bunnyTusAuthHeaders(prep){
+  return {
+    'Tus-Resumable':'1.0.0',
+    'AuthorizationSignature':String(prep.signature||''),
+    'AuthorizationExpire':String(prep.expires||''),
+    'VideoId':String(prep.videoId||''),
+    'LibraryId':String(prep.libraryId||'')
+  };
+}
+async function bunnyTusOffset(uploadUrl,prep){
+  const response=await fetch(uploadUrl,{method:'HEAD',headers:bunnyTusAuthHeaders(prep)});
+  if(!response.ok)throw new Error('No se pudo reanudar la carga de Bunny ('+response.status+')');
+  return Math.max(0,Number(response.headers.get('Upload-Offset'))||0);
+}
+async function putBunnyTusWithProgress(prep,file,onProgress){
+  const auth=bunnyTusAuthHeaders(prep);
+  const metadata=[
+    'filename '+bunnyTusBase64(file.name),
+    'title '+bunnyTusBase64(file.name),
+    'filetype '+bunnyTusBase64(file.type||'application/octet-stream')
+  ].join(',');
+  const create=await fetch(prep.uploadUrl,{
+    method:'POST',
+    headers:{...auth,'Upload-Length':String(file.size),'Upload-Metadata':metadata}
+  });
+  if(!create.ok)throw new Error('Bunny no pudo iniciar la carga ('+create.status+')');
+  const location=create.headers.get('Location');
+  if(!location)throw new Error('Bunny no devolvió la URL de carga');
+  const uploadUrl=new URL(location,prep.uploadUrl).toString();
+  let offset=Math.max(0,Number(create.headers.get('Upload-Offset'))||0);
+  const chunkSize=16*1024*1024;
+  let lastPercent=-1;
+  while(offset<file.size){
+    const start=offset;
+    const end=Math.min(file.size,start+chunkSize);
+    let success=false,lastError=null;
+    for(let attempt=0;attempt<5&&!success;attempt++){
+      try{
+        const response=await fetch(uploadUrl,{
+          method:'PATCH',
+          headers:{...auth,'Upload-Offset':String(offset),'Content-Type':'application/offset+octet-stream'},
+          body:file.slice(offset,end)
+        });
+        if(response.status===409){
+          offset=await bunnyTusOffset(uploadUrl,prep);
+          success=true;
+          break;
+        }
+        if(!response.ok)throw new Error('Bunny respondió '+response.status);
+        offset=Math.max(offset,Number(response.headers.get('Upload-Offset'))||end);
+        success=true;
+      }catch(error){
+        lastError=error;
+        if(attempt>=4)break;
+        await new Promise(resolve=>setTimeout(resolve,1000*Math.min(8,2**attempt)));
+        try{offset=await bunnyTusOffset(uploadUrl,prep)}catch{}
+        if(offset>=end){success=true;break}
+        if(offset!==start)break;
+      }
+    }
+    if(!success)throw lastError||new Error('No se pudo continuar la carga a Bunny');
+    const percent=Math.min(100,Math.round(offset/file.size*100));
+    if(percent!==lastPercent){lastPercent=percent;if(onProgress)onProgress(percent)}
+  }
+}
+async function uploadPreparedVideo(prep,file,onProgress){
+  if(prep.provider==='bunny')return putBunnyTusWithProgress(prep,file,onProgress);
+  return putFileWithProgress(prep.uploadUrl,file,onProgress);
+}
+async function cancelPreparedVideo(prep){
+  if(!prep?.ticket||prep.provider!=='bunny')return;
+  try{await api('/api/admin/video/cancel',{method:'POST',body:JSON.stringify({ticket:prep.ticket})})}catch{}
+}
+async function uploadTestVideo(lessonId,input,mode='add',videoId=''){
+  const file=input.files?.[0];if(!file)return;
+  if(!['video/mp4','video/webm','video/quicktime'].includes(file.type)){toast('Usa un vídeo MP4, WebM o MOV','error');input.value='';return}
+  if(file.size>2_000_000_000){toast('Máximo 2 GB por vídeo','error');input.value='';return}
+  let prep=null,uploaded=false;
+  try{
+    toast(mode==='replace'?'Preparando sustitución segura…':'Preparando nuevo vídeo…');
+    prep=await api('/api/admin/video/upload-url',{method:'POST',body:JSON.stringify({lessonId,name:file.name,mime:file.type,size:file.size,mode,videoId})});
+    let shown=-20;
+    await uploadPreparedVideo(prep,file,p=>{if(p>=shown+10||p===100){shown=p;toast((prep.provider==='bunny'?'Subiendo a Bunny… ':'Subiendo vídeo… ')+p+'%')}});
+    uploaded=true;
+    const result=await api('/api/admin/video/complete',{method:'POST',body:JSON.stringify({ticket:prep.ticket})});
+    toast(result.processing?'Vídeo subido. Bunny lo está procesando…':(mode==='replace'?'Vídeo reemplazado':'Vídeo añadido a la clase'));
+    await renderAdmin();
+  }catch(e){
+    if(prep&&!uploaded)await cancelPreparedVideo(prep);
+    toast(e.message,'error');
+  }finally{input.value=''}
+}
 
 function matchLessonForVideoFile(fileName,lessons){
   const base=String(fileName||'').replace(/\.[^.]+$/,'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
@@ -452,9 +642,17 @@ function matchLessonForVideoFile(fileName,lessons){
   return null;
 }
 async function uploadVideoFileDirect(lesson,file){
-  const prep=await api('/api/admin/video/upload-url',{method:'POST',body:JSON.stringify({lessonId:lesson.id,name:file.name,mime:file.type,size:file.size,mode:'add',videoId:''})});
-  await putFileWithProgress(prep.uploadUrl,file,p=>{if(p===100||p===25||p===50||p===75)toast('Subiendo '+lesson.code+' · '+p+'%')});
-  await api('/api/admin/video/complete',{method:'POST',body:JSON.stringify({ticket:prep.ticket})});
+  let prep=null,uploaded=false;
+  try{
+    prep=await api('/api/admin/video/upload-url',{method:'POST',body:JSON.stringify({lessonId:lesson.id,name:file.name,mime:file.type,size:file.size,mode:'add',videoId:''})});
+    let shown=-20;
+    await uploadPreparedVideo(prep,file,p=>{if(p>=shown+10||p===100){shown=p;toast('Subiendo '+lesson.code+' a '+(prep.provider==='bunny'?'Bunny':'almacenamiento')+' · '+p+'%')}});
+    uploaded=true;
+    return await api('/api/admin/video/complete',{method:'POST',body:JSON.stringify({ticket:prep.ticket})});
+  }catch(error){
+    if(prep&&!uploaded)await cancelPreparedVideo(prep);
+    throw error;
+  }
 }
 async function bulkUploadPielPerfectaVideos(courseId,input){
   const course=findAdminCourse(courseId);if(!course){toast('Curso no encontrado','error');input.value='';return}
@@ -599,7 +797,7 @@ document.addEventListener('click',event=>{
   }
 },true);
 
-window.addEventListener('beforeunload',()=>{const a=activeLessonVideo;if(!a?.element?.duration)return;try{navigator.sendBeacon?.('/api/video/progress',new Blob([JSON.stringify({lessonId:a.lessonId,videoId:a.videoId,currentTime:a.element.currentTime,duration:a.element.duration,playing:false})],{type:'application/json'}))}catch{}})
+window.addEventListener('beforeunload',()=>{const a=activeLessonVideo;if(!a)return;const currentTime=Number(a.currentTime??a.element?.currentTime)||0;const duration=Number(a.duration??a.element?.duration)||0;if(!duration)return;try{navigator.sendBeacon?.('/api/video/progress',new Blob([JSON.stringify({lessonId:a.lessonId,videoId:a.videoId,currentTime,duration,playing:false})],{type:'application/json'}))}catch{}})
 function render(route){if(route==='store')return openStore();if(route==='login'||!state.me)return renderLogin();({dashboard:renderDashboard,courses:renderCourses,course:renderCourse,lesson:renderLesson,assessment:renderAssessment,profile:renderProfile,teacher:renderTeacher,admin:renderAdmin}[route]||renderDashboard)()}
 Object.assign(window,{render,issueCertificate,revokeCertificate,setRoute,openCourse,logout,openStore,openForgotPassword,forgotPassword,renderResetPassword,resetPassword,openCheckout,validateCoupon,checkoutMock,checkoutReal,confirmPaymentReturn,openStudent,saveStudentProfile,toggleStudentStatus,revokeStudentSessions,revokeStudentSession,manualEnroll,removeEnrollment,resetStudentProgress,addStudentNote,sendStudentWelcome,sendPurchaseTest,sendCourseCompletedTest,sendCertificateTest,sendReminderTest,sendStudentReminder,runConcurrencySelfTest,runPreviewClosure,saveStudentProfileById,flushEmailQueue,retryAdminEmail,openLesson,initLessonVideo,toggleVideoFullscreenByIndex,completeLesson,openAssessment,renderAssessment,openCourseForm,openModuleForm,openLessonForm,openAssessmentForm,openQuestionForm,reopenAssessment,deleteQuestion,deleteAssessment,closeDrawer,toggleCourseStatus,toggleModuleStatus,toggleLessonStatus,deleteCourse,deleteModule,deleteLesson,uploadResource,deleteResource,uploadTestVideo,deleteTestVideo,publishPielPerfectaReady,bulkUploadPielPerfectaVideos,exportPielPerfectaTransfer,validatePielPerfectaTransferFile,commitPielPerfectaTransfer,openBundleForm,saveBundle,openCouponForm,saveCoupon,openPromotionForm,savePromotion,deleteMonetization,renderTeacher,openTeacherModuleForm,openTeacherLessonForm,teacherUploadResource,openTeacherAdminForm,assignTeacher,unassignTeacher,askTutor,sendTutorFeedback,saveTutorPolicy,openTutorSource,state});
 setTimeout(()=>bootstrap(),0);
