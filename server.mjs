@@ -1126,7 +1126,7 @@ function bunnyTusCredentials(guid,expiresSeconds){
 function bunnyEmbedUrl(guid,expiresAtMs){
   const expires=Math.floor(Number(expiresAtMs)/1000);
   const token=crypto.createHash('sha256').update(BUNNY_STREAM_TOKEN_KEY+guid+String(expires)).digest('hex');
-  const params=new URLSearchParams({token,expires:String(expires),autoplay:'false',preload:'true',rememberPosition:'false',rememberSettings:'false',playsinline:'true',disableAirPlay:'true'});
+  const params=new URLSearchParams({token,expires:String(expires),autoplay:'false',preload:'true',rememberPosition:'false',rememberSettings:'false',playsinline:'true',disableIosPlayer:'true',disableAirPlay:'true',chromecast:'false',showHeatmap:'false',levelCap:'true'});
   return 'https://player.mediadelivery.net/embed/'+encodeURIComponent(BUNNY_STREAM_LIBRARY_ID)+'/'+encodeURIComponent(guid)+'?'+params.toString();
 }
 async function removeStoredVideoRef(ref){
@@ -3732,6 +3732,8 @@ export const handleRequest=async (req,res)=>{
             verifiedSize=Number(blobMeta?.size)||verifiedSize;
           }
           lesson.videos=lessonVideos(lesson);
+          const existingVideo=lesson.videos.find(v=>String(v.ref||'')===String(nextRef));
+          if(existingVideo)return json(res,200,{ok:true,idempotent:true,video:existingVideo,videos:lesson.videos,processing:String(existingVideo.ref||'').startsWith('bunny:')&&Number(existingVideo.encodeProgress||0)<100});
           const nextVideo={id:newId(),ref:nextRef,name:claims.name,mime:claims.mime,size:verifiedSize,position:lesson.videos.length+1,createdAt:now(),provider:nextRef.startsWith('bunny:')?'bunny':'blob',remoteStatus,encodeProgress};
           let oldRef=null;
           if(claims.mode==='replace'){
