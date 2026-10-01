@@ -91,7 +91,7 @@ const securityHeaders = {
   'permissions-policy':'camera=(), microphone=(), geolocation=(), payment=(self)',
   'cross-origin-opener-policy':'same-origin',
   'cross-origin-resource-policy':'same-origin',
-  'content-security-policy': "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob:; media-src 'self' blob: https://*.private.blob.vercel-storage.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://*.private.blob.vercel-storage.com"
+  'content-security-policy': "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob: https://*.mediadelivery.net https://*.b-cdn.net; media-src 'self' blob: https://*.private.blob.vercel-storage.com https://*.mediadelivery.net https://*.b-cdn.net; frame-src https://player.mediadelivery.net https://iframe.mediadelivery.net; style-src 'self' 'unsafe-inline'; script-src 'self' https://assets.mediadelivery.net; connect-src 'self' https://*.private.blob.vercel-storage.com https://video.bunnycdn.com https://*.mediadelivery.net https://*.b-cdn.net"
 };
 if (IS_PROD) securityHeaders['strict-transport-security']='max-age=31536000; includeSubDomains';
 
@@ -1084,6 +1084,56 @@ function verifyVideoUploadTicket(ticket){
     if(!payload?.lessonId||!payload?.pathname||Number(payload.expiresAt)<Date.now())return null;
     return payload;
   }catch{return null}
+}
+
+function bunnyConfigured(){
+  return VIDEO_PROVIDER==='bunny'&&Boolean(BUNNY_STREAM_LIBRARY_ID&&BUNNY_STREAM_API_KEY&&BUNNY_STREAM_TOKEN_KEY);
+}
+async function bunnyApi(pathname,{method='GET',body=null}={}){
+  if(!BUNNY_STREAM_LIBRARY_ID||!BUNNY_STREAM_API_KEY)throw new Error('Bunny Stream no está configurado');
+  const response=await fetch('https://video.bunnycdn.com/library/'+encodeURIComponent(BUNNY_STREAM_LIBRARY_ID)+pathname,{
+    method,
+    headers:{AccessKey:BUNNY_STREAM_API_KEY,Accept:'application/json',...(body?{'Content-Type':'application/json'}:{})},
+    body:body?JSON.stringify(body):undefined
+  });
+  const textBody=await response.text();
+  let payload=null;try{payload=textBody?JSON.parse(textBody):null}catch{}
+  if(!response.ok){
+    const detail=cleanText(payload?.message||payload?.Message||payload?.error||textBody||('HTTP '+response.status),260);
+    const error=new Error('Bunny Stream respondió '+response.status+(detail?' · '+detail:''));
+    error.statusCode=response.status>=400&&response.status<500?502:503;
+    throw error;
+  }
+  return payload;
+}
+async function bunnyCreateVideo(title){
+  const payload=await bunnyApi('/videos',{method:'POST',body:{title:cleanText(title,240)||'Vídeo Lykios Academy'}});
+  const guid=cleanText(payload?.guid,120);
+  if(!guid)throw new Error('Bunny no devolvió el identificador del vídeo');
+  return payload;
+}
+async function bunnyGetVideo(guid){
+  return bunnyApi('/videos/'+encodeURIComponent(guid));
+}
+async function bunnyDeleteVideo(guid){
+  if(!guid||!BUNNY_STREAM_LIBRARY_ID||!BUNNY_STREAM_API_KEY)return false;
+  try{await bunnyApi('/videos/'+encodeURIComponent(guid),{method:'DELETE'});return true}catch{return false}
+}
+function bunnyTusCredentials(guid,expiresSeconds){
+  const signature=crypto.createHash('sha256').update(BUNNY_STREAM_LIBRARY_ID+BUNNY_STREAM_API_KEY+String(expiresSeconds)+guid).digest('hex');
+  return {provider:'bunny',uploadUrl:'https://video.bunnycdn.com/tusupload',libraryId:BUNNY_STREAM_LIBRARY_ID,videoId:guid,signature,expires:expiresSeconds};
+}
+function bunnyEmbedUrl(guid,expiresAtMs){
+  const expires=Math.floor(Number(expiresAtMs)/1000);
+  const token=crypto.createHash('sha256').update(BUNNY_STREAM_TOKEN_KEY+guid+String(expires)).digest('hex');
+  const params=new URLSearchParams({token,expires:String(expires),autoplay:'false',preload:'true',rememberPosition:'false',rememberSettings:'false',playsinline:'true',disableAirPlay:'true'});
+  return 'https://player.mediadelivery.net/embed/'+encodeURIComponent(BUNNY_STREAM_LIBRARY_ID)+'/'+encodeURIComponent(guid)+'?'+params.toString();
+}
+async function removeStoredVideoRef(ref){
+  const value=String(ref||'');
+  if(value.startsWith('blob:')){try{await resourceStore.remove(value.slice(5));return true}catch{return false}}
+  if(value.startsWith('bunny:'))return bunnyDeleteVideo(value.slice(6));
+  return false;
 }
 
 function lessonVideos(lesson){
@@ -3106,16 +3156,28 @@ export const handleRequest=async (req,res)=>{
 
           const expiresAt=Date.now()+VIDEO_TOKEN_TTL_MS;
           const token=signVideoToken({userId:workUser.id,lessonId:lesson.id,expiresAt});
-          let streamUrl='/api/video/stream?token='+encodeURIComponent(token);
+          let streamUrl='/api/video/stream?token='+encodeURIComponent(token),embedUrl=null,provider='legacy';
           const ref=String(selected.ref||'');
-          if(ref.startsWith('blob:')){
+          if(ref.startsWith('bunny:')){
+            if(!bunnyConfigured())return json(res,503,{error:'Bunny Stream no está disponible en este entorno'});
+            const guid=ref.slice(6);
+            let meta;try{meta=await bunnyGetVideo(guid)}catch{return json(res,503,{error:'No se pudo consultar el estado del vídeo en Bunny'})}
+            const encodeProgress=Math.max(0,Number(meta?.encodeProgress)||0);
+            const resolutions=String(meta?.availableResolutions||'').trim();
+            if(encodeProgress<100&&!resolutions)return json(res,409,{error:'El vídeo todavía se está procesando en Bunny. Inténtalo de nuevo en unos minutos.',processing:true,encodeProgress});
+            const bunnyExpiresAt=Date.now()+2*60*60*1000;
+            embedUrl=bunnyEmbedUrl(guid,bunnyExpiresAt);
+            provider='bunny';
+            streamUrl=null;
+          }else if(ref.startsWith('blob:')){
             const pathname=ref.slice(5);
             const {issueSignedToken,presignUrl}=await import('@vercel/blob');
             const signedToken=await issueSignedToken({pathname,operations:['get'],validUntil:expiresAt});
             const signed=await presignUrl(signedToken,{pathname,operation:'get',access:'private',validUntil:expiresAt,useCache:false});
             streamUrl=signed.presignedUrl;
+            provider='blob';
           }
-          return json(res,200,{expiresAt,videoId:selected.id,name:selected.name,streamUrl,progress:videoProgressPayload(workDb,workUser,lesson.id,selected.id),protection:{privateStorage:ref.startsWith('blob:'),expiresAt,downloadUi:false,maxConcurrentPlayback:1}});
+          return json(res,200,{expiresAt,videoId:selected.id,name:selected.name,provider,streamUrl,embedUrl,progress:videoProgressPayload(workDb,workUser,lesson.id,selected.id),protection:{privateStorage:ref.startsWith('blob:')||ref.startsWith('bunny:'),signedPlayback:ref.startsWith('bunny:')||ref.startsWith('blob:'),expiresAt,downloadUi:false,maxConcurrentPlayback:1}});
         }
         return json(res,503,{error:'El Campus está sincronizando tu sesión. Inténtalo de nuevo.'});
       }
@@ -3629,24 +3691,48 @@ export const handleRequest=async (req,res)=>{
           if(!name||!size)return json(res,400,{error:'Datos de vídeo incompletos'});
           if(!['video/mp4','video/webm','video/quicktime'].includes(mime))return json(res,415,{error:'Formato de vídeo no permitido'});
           if(size>MAX_VIDEO_BYTES)return json(res,413,{error:'El vídeo supera el límite de 2 GB por archivo'});
+          const mode=body.mode==='replace'?'replace':'add';const replaceVideoId=cleanText(body.videoId,120)||null;
+
+          if(VIDEO_PROVIDER==='bunny'){
+            if(!bunnyConfigured())return json(res,503,{error:'Bunny Stream no está completamente configurado en este entorno'});
+            const created=await bunnyCreateVideo((lesson.code?lesson.code+' · ':'')+name);
+            const guid=cleanText(created.guid,120);
+            const expiresSeconds=Math.floor(Date.now()/1000)+(6*60*60);
+            const expiresAt=expiresSeconds*1000;
+            const pathname='bunny:'+guid;
+            const ticket=signVideoUploadTicket({provider:'bunny',lessonId:lesson.id,pathname,bunnyVideoId:guid,name,mime,size,mode,replaceVideoId,expiresAt});
+            return json(res,200,{...bunnyTusCredentials(guid,expiresSeconds),ticket,expiresAt});
+          }
+
           const ext=path.extname(name).slice(0,10).replace(/[^.a-zA-Z0-9]/g,'')||'.mp4';
           const pathname=`videos/${lesson.id}/${newId()}${ext}`;
           const expiresAt=Date.now()+2*60*60*1000;
           const {issueSignedToken,presignUrl}=await import('@vercel/blob');
           const signedToken=await issueSignedToken({pathname,operations:['put'],validUntil:expiresAt,allowedContentTypes:[mime],maximumSizeInBytes:MAX_VIDEO_BYTES});
           const signed=await presignUrl(signedToken,{pathname,operation:'put',access:'private',validUntil:expiresAt,allowedContentTypes:[mime],maximumSizeInBytes:MAX_VIDEO_BYTES,addRandomSuffix:false,allowOverwrite:false});
-          const mode=body.mode==='replace'?'replace':'add';const replaceVideoId=cleanText(body.videoId,120)||null;
-          const ticket=signVideoUploadTicket({lessonId:lesson.id,pathname,name,mime,size,mode,replaceVideoId,expiresAt});
-          return json(res,200,{uploadUrl:signed.presignedUrl,ticket,expiresAt});
+          const ticket=signVideoUploadTicket({provider:'blob',lessonId:lesson.id,pathname,name,mime,size,mode,replaceVideoId,expiresAt});
+          return json(res,200,{provider:'blob',uploadUrl:signed.presignedUrl,ticket,expiresAt});
         }
         if(url.pathname==='/api/admin/video/complete' && req.method==='POST'){
           const body=await readBody(req);const claims=verifyVideoUploadTicket(body.ticket);if(!claims)return json(res,400,{error:'Carga de vídeo inválida o caducada'});
           const lesson=db.lessons.find(l=>l.id===claims.lessonId);if(!lesson)return json(res,404,{error:'Clase no encontrada'});
-          const {head}=await import('@vercel/blob');
-          let blobMeta;
-          try{blobMeta=await head(claims.pathname);}catch{return json(res,409,{error:'El archivo todavía no está disponible en Blob'})}
+          let nextRef=null,verifiedSize=Number(claims.size)||null,remoteStatus=null,encodeProgress=null;
+          if(claims.provider==='bunny'||String(claims.pathname||'').startsWith('bunny:')){
+            const guid=cleanText(claims.bunnyVideoId||String(claims.pathname||'').slice(6),120);
+            if(!guid)return json(res,400,{error:'Identificador Bunny inválido'});
+            let meta;try{meta=await bunnyGetVideo(guid)}catch{return json(res,409,{error:'Bunny todavía no reconoce el vídeo subido'})}
+            nextRef='bunny:'+guid;
+            verifiedSize=Number(meta?.storageSize)||verifiedSize;
+            remoteStatus=Number(meta?.status);
+            encodeProgress=Number(meta?.encodeProgress)||0;
+          }else{
+            const {head}=await import('@vercel/blob');
+            let blobMeta;try{blobMeta=await head(claims.pathname)}catch{return json(res,409,{error:'El archivo todavía no está disponible en Blob'})}
+            nextRef='blob:'+claims.pathname;
+            verifiedSize=Number(blobMeta?.size)||verifiedSize;
+          }
           lesson.videos=lessonVideos(lesson);
-          const nextVideo={id:newId(),ref:`blob:${claims.pathname}`,name:claims.name,mime:claims.mime,size:Number(blobMeta?.size)||Number(claims.size)||null,position:lesson.videos.length+1,createdAt:now()};
+          const nextVideo={id:newId(),ref:nextRef,name:claims.name,mime:claims.mime,size:verifiedSize,position:lesson.videos.length+1,createdAt:now(),provider:nextRef.startsWith('bunny:')?'bunny':'blob',remoteStatus,encodeProgress};
           let oldRef=null;
           if(claims.mode==='replace'){
             const idx=Math.max(0,lesson.videos.findIndex(v=>v.id===claims.replaceVideoId));
@@ -3657,8 +3743,16 @@ export const handleRequest=async (req,res)=>{
           if(claims.mode==='replace')db.videoProgress=db.videoProgress.filter(v=>!(v.lessonId===lesson.id&&String(v.videoId||'')===String(nextVideo.id)));
           reconcileLessonForStudents(db,lesson);
           await writeDb(db);
-          if(oldRef&&oldRef!==nextVideo.ref&&String(oldRef).startsWith('blob:')){try{await resourceStore.remove(String(oldRef).slice(5));}catch{}}
-          return json(res,201,{ok:true,video:nextVideo,videos:lesson.videos});
+          if(oldRef&&oldRef!==nextVideo.ref)await removeStoredVideoRef(oldRef);
+          return json(res,201,{ok:true,video:nextVideo,videos:lesson.videos,processing:nextVideo.provider==='bunny'&&Number(encodeProgress)<100});
+        }
+        if(url.pathname==='/api/admin/video/cancel' && req.method==='POST'){
+          const body=await readBody(req);const claims=verifyVideoUploadTicket(body.ticket);if(!claims)return json(res,400,{error:'Carga inválida o caducada'});
+          if(claims.provider==='bunny'||String(claims.pathname||'').startsWith('bunny:')){
+            const guid=cleanText(claims.bunnyVideoId||String(claims.pathname||'').slice(6),120);
+            if(guid)await bunnyDeleteVideo(guid);
+          }
+          return json(res,200,{ok:true});
         }
 
         if(url.pathname==='/api/admin/video' && req.method==='POST'){
@@ -3677,7 +3771,7 @@ export const handleRequest=async (req,res)=>{
         if(videoDeleteMatch&&req.method==='DELETE'){
           const lesson=db.lessons.find(l=>l.id===videoDeleteMatch[1]);if(!lesson)return json(res,404,{error:'Clase no encontrada'});
           lesson.videos=lessonVideos(lesson);const requested=url.searchParams.get('videoId');const target=requested?lesson.videos.find(v=>v.id===requested):lesson.videos[0];if(!target)return json(res,404,{error:'Vídeo no encontrado'});
-          if(String(target.ref||'').startsWith('blob:')){try{await resourceStore.remove(String(target.ref).slice(5));}catch{}}
+          await removeStoredVideoRef(target.ref);
           lesson.videos=lesson.videos.filter(v=>v.id!==target.id).map((v,i)=>({...v,position:i+1}));db.videoProgress=db.videoProgress.filter(v=>!(v.lessonId===lesson.id&&String(v.videoId||'')===String(target.id)));
           syncPrimaryVideoFields(lesson);lesson.updatedAt=now();reconcileLessonForStudents(db,lesson);await writeDb(db);return json(res,200,{ok:true,videos:lesson.videos});
         }
