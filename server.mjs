@@ -39,6 +39,11 @@ const RESEND_API_BASE = 'https://api.resend.com';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const UPLOAD_DIR = process.env.LYKIOS_UPLOAD_DIR || (process.env.VERCEL ? '/tmp/lykios-uploads' : path.join(__dirname, 'uploads'));
 const FILE_BACKEND = process.env.LYKIOS_FILE_BACKEND || (process.env.VERCEL ? 'blob' : 'fs');
+const VIDEO_PROVIDER = String(process.env.LYKIOS_VIDEO_PROVIDER || 'vercel').trim().toLowerCase();
+const BUNNY_STREAM_LIBRARY_ID = String(process.env.BUNNY_STREAM_LIBRARY_ID || '').trim();
+const BUNNY_STREAM_CDN_HOSTNAME = String(process.env.BUNNY_STREAM_CDN_HOSTNAME || '').trim();
+const BUNNY_STREAM_API_KEY = String(process.env.BUNNY_STREAM_API_KEY || '').trim();
+const BUNNY_STREAM_TOKEN_KEY = String(process.env.BUNNY_STREAM_TOKEN_KEY || '').trim();
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const MAX_JSON_BYTES = 9_000_000;
 const MAX_RESOURCE_BYTES = 6_000_000;
@@ -2591,6 +2596,34 @@ export const handleRequest=async (req,res)=>{
       };
       return json(res,Object.values(checks).every(Boolean)?200:500,{ok:Object.values(checks).every(Boolean),checks,activeSessions:active.length,securityEvents:fake.securityEvents.map(e=>({type:e.type,score:e.score}))});
     }
+    if(IS_PREVIEW && url.pathname==='/api/public/video-provider-check' && req.method==='GET'){
+      const configured={
+        provider:VIDEO_PROVIDER,
+        libraryId:BUNNY_STREAM_LIBRARY_ID||null,
+        cdnHostname:BUNNY_STREAM_CDN_HOSTNAME||null,
+        apiKey:Boolean(BUNNY_STREAM_API_KEY),
+        tokenKey:Boolean(BUNNY_STREAM_TOKEN_KEY)
+      };
+      if(VIDEO_PROVIDER!=='bunny')return json(res,200,{ok:false,configured,reason:'El proveedor de vídeo de Preview todavía no es Bunny'});
+      if(!BUNNY_STREAM_LIBRARY_ID||!BUNNY_STREAM_CDN_HOSTNAME||!BUNNY_STREAM_API_KEY||!BUNNY_STREAM_TOKEN_KEY){
+        return json(res,200,{ok:false,configured,reason:'Faltan variables Bunny en Preview'});
+      }
+      try{
+        const response=await fetch('https://video.bunnycdn.com/library/'+encodeURIComponent(BUNNY_STREAM_LIBRARY_ID)+'/videos?page=1&itemsPerPage=1',{
+          headers:{AccessKey:BUNNY_STREAM_API_KEY,Accept:'application/json'}
+        });
+        const payload=await response.json().catch(()=>null);
+        return json(res,response.ok?200:502,{
+          ok:response.ok,
+          configured,
+          bunny:{reachable:true,status:response.status,totalItems:Number(payload?.totalItems??payload?.totalCount??0)||0},
+          secretValuesExposed:false
+        });
+      }catch(error){
+        return json(res,502,{ok:false,configured,bunny:{reachable:false},secretValuesExposed:false,error:cleanText(error?.message||'No se pudo contactar Bunny',220)});
+      }
+    }
+
     if(IS_PREVIEW && url.pathname==='/api/public/blob-usage-check' && req.method==='GET'){
       if(FILE_BACKEND!=='blob')return json(res,200,{blob:false,fileBackend:FILE_BACKEND});
       try{
