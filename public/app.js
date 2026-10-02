@@ -479,7 +479,7 @@ async function sendStudentReminder(userId,courseId){try{await api('/api/admin/em
 function renderAdminOrders(){const items=state.adminCommerce?.orders||[];if(!items.length)return '<div class="empty">Todavía no hay pedidos.</div>';return `<div class="cert-table-head"><span>Pedido</span><span>Alumno</span><span>Curso</span><span>Total</span><span>Estado</span></div>${items.map(o=>`<div class="cert-table-row"><span><b>${esc(o.number)}</b><small>${new Date(o.createdAt).toLocaleString('es-ES')}</small></span><span>${esc(o.studentName)}<small>${esc(o.email)}</small></span><span>${esc(o.courseTitle)}</span><span>${esc(o.totalLabel)}</span><span><span class="cert-valid">${esc(o.status)}</span></span></div>`).join('')}`};
 function renderAdminCertificates(){const items=state.adminCertificates||[];if(!items.length)return '<div class="empty">Todavía no hay certificados emitidos.</div>';return `<div class="cert-table-head"><span>Alumno</span><span>Curso</span><span>Código</span><span>Estado</span><span></span></div>${items.map(c=>`<div class="cert-table-row"><span><b>${esc(c.studentName)}</b><small>${new Date(c.issuedAt).toLocaleDateString('es-ES')}</small></span><span>${esc(c.courseTitle)}</span><span><a target="_blank" href="/verify/${encodeURIComponent(c.code)}">${esc(c.code)}</a></span><span>${c.status==='valid'?'<span class="cert-valid">Válido</span>':'<span class="cert-revoked">Revocado</span>'}</span><span>${c.status==='valid'?`<button class="icon-btn danger-soft" onclick="revokeCertificate('${c.id}')">Revocar</button>`:''}</span></div>`).join('')}`};
 async function revokeCertificate(id){if(!confirm('¿Revocar este certificado? La página pública mostrará que ya no es válido.'))return;try{await api(`/api/admin/certificate/${id}/revoke`,{method:'POST'});toast('Certificado revocado');await renderAdmin()}catch(e){toast(e.message,'error')}}
-function renderAdminCourse(c){const lessonCount=c.modules.flatMap(m=>m.lessons).length;const bulk=c.slug==='piel-perfecta-20'?`<div class="card" style="margin:14px 0;padding:16px"><div class="page-kicker">MIGRACIÓN PIEL PERFECTA</div><div style="display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap"><div><b>Carga masiva de vídeos</b><p class="muted" style="margin:4px 0 0">Selecciona todos los vídeos a la vez. El Campus los asignará por códigos como 0.1, 1.2 o nombres tipo “Módulo 3 Vídeo 2”. Los vídeos nuevos van directamente a Bunny Stream. Si una clase todavía usa el antiguo Vercel Blob, el Campus la migrará automáticamente a Bunny; las clases que ya estén en Bunny se omiten.</p></div><div style="display:flex;gap:8px;flex-wrap:wrap"><label class="upload-label">⇧ Seleccionar vídeos<input type="file" multiple accept="video/mp4,video/webm,video/quicktime" data-bulk-video-course="${c.id}" hidden></label><button class="btn-secondary" onclick="publishPielPerfectaReady()">✓ Validar y publicar en Preview</button></div></div></div>`:'';return `<section class="admin-course card"><div class="admin-course-head"><div><div class="admin-code">${esc(c.slug)}</div><h2>${esc(c.title)}</h2><p>${esc(c.subtitle||'Sin subtítulo')}</p><div class="catalog-meta">${c.modules.length} módulos · ${lessonCount} clases · ${typeof c.priceCents==='number'?(c.priceCents/100).toLocaleString('es-ES',{style:'currency',currency:c.currency||'EUR'}):''} · ${statusPill(c.status)}</div></div><div class="action-group"><button class="icon-btn" title="Editar curso" onclick="openCourseForm('${c.id}')">✎</button><button class="icon-btn ${c.status==='published'?'danger-soft':'success-soft'}" onclick="toggleCourseStatus('${c.id}')">${c.status==='published'?'Ocultar':'Publicar'}</button><button class="icon-btn danger-soft" title="Eliminar curso" onclick="deleteCourse('${c.id}')">Eliminar</button></div></div>${bulk}
+function renderAdminCourse(c){const lessonCount=c.modules.flatMap(m=>m.lessons).length;const bulk=c.slug==='piel-perfecta-20'?`<div class="card" style="margin:14px 0;padding:16px"><div class="page-kicker">MIGRACIÓN PIEL PERFECTA</div><div style="display:grid;gap:16px"><div style="display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap"><div style="flex:1;min-width:260px"><b>Carga masiva de vídeos</b><p class="muted" style="margin:4px 0 0">Selecciona todos los vídeos a la vez. El Campus los asignará por códigos como 0.1, 1.2 o nombres tipo “Módulo 3 Vídeo 2”. Los vídeos nuevos van directamente a Bunny Stream. Si una clase todavía usa el antiguo Vercel Blob, el Campus la migrará automáticamente a Bunny; las clases que ya estén en Bunny se omiten.</p></div><label class="upload-label">⇧ Seleccionar vídeos<input type="file" multiple accept="video/mp4,video/webm,video/quicktime" data-bulk-video-course="${c.id}" hidden></label></div><div style="border-top:1px solid var(--line,#dfe7e7);padding-top:14px;display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap"><div style="flex:1;min-width:260px"><b>Carga masiva de materiales PDF</b><p class="muted" style="margin:4px 0 0">Reconoce automáticamente <b>ModuloN_Diapositivas.pdf</b> y <b>ModuloN_Manual_*.pdf</b>. Los dos se adjuntan a la primera clase del módulo. El cuaderno práctico de la tercera clase se conserva como recurso independiente.</p></div><label class="upload-label">⇧ Seleccionar PDFs<input type="file" multiple accept="application/pdf,.pdf" data-bulk-material-course="${c.id}" hidden></label></div><div style="display:flex;justify-content:flex-end"><button class="btn-secondary" onclick="publishPielPerfectaReady()">✓ Validar y publicar en Preview</button></div></div></div>`:'';return `<section class="admin-course card"><div class="admin-course-head"><div><div class="admin-code">${esc(c.slug)}</div><h2>${esc(c.title)}</h2><p>${esc(c.subtitle||'Sin subtítulo')}</p><div class="catalog-meta">${c.modules.length} módulos · ${lessonCount} clases · ${typeof c.priceCents==='number'?(c.priceCents/100).toLocaleString('es-ES',{style:'currency',currency:c.currency||'EUR'}):''} · ${statusPill(c.status)}</div></div><div class="action-group"><button class="icon-btn" title="Editar curso" onclick="openCourseForm('${c.id}')">✎</button><button class="icon-btn ${c.status==='published'?'danger-soft':'success-soft'}" onclick="toggleCourseStatus('${c.id}')">${c.status==='published'?'Ocultar':'Publicar'}</button><button class="icon-btn danger-soft" title="Eliminar curso" onclick="deleteCourse('${c.id}')">Eliminar</button></div></div>${bulk}
 <div class="module-stack">${c.modules.map(m=>renderAdminModule(c,m)).join('')}<button class="add-row" onclick="openModuleForm('${c.id}')">＋ Añadir módulo</button></div></section>`}
 function renderAdminModule(c,m){return `<div class="admin-module"><div class="admin-module-head"><div><span class="module-code">${esc(m.code)}</span><b>${esc(m.title)}</b> ${statusPill(m.status)} ${m.assessment?`<span class="assessment-badge">Test ${m.assessment.status==='published'?'publicado':'borrador'}</span>`:''}</div><div class="mini-actions"><button onclick="openAssessmentForm('module','${m.id}')">${m.assessment?'Evaluación':'＋ Evaluación'}</button><button onclick="openModuleForm('${c.id}','${m.id}')">Editar</button><button onclick="toggleModuleStatus('${m.id}')">${m.status==='published'?'Despublicar':'Publicar'}</button><button class="danger-text" onclick="deleteModule('${m.id}')">Eliminar</button></div></div><div class="admin-lessons">${m.lessons.map(l=>renderAdminLesson(l)).join('')}<button class="add-lesson" onclick="openLessonForm('${m.id}')">＋ Nueva clase</button></div></div>`}
 function renderAdminLesson(l){const videos=lessonVideoList(l);return `<div class="admin-lesson"><div class="lesson-index">${esc(l.code)}</div><div class="lesson-info"><b>${esc(l.title)}</b><div class="lesson-meta">${l.durationMinutes} min · ${statusPill(l.status)} · ${(l.resources||[]).length} recursos · ${videos.length} vídeo${videos.length===1?'':'s'} ${l.assessment?`· <span class="assessment-badge">Test ${l.assessment.status==='published'?'publicado':'borrador'}</span>`:''}</div>${(l.resources||[]).length?`<div class="resource-list">${l.resources.map(r=>`<span class="resource-mini"><a target="_blank" href="/api/resource?id=${r.id}">${esc(r.name)}</a><button onclick="deleteResource('${r.id}')">×</button></span>`).join('')}</div>`:''}${videos.length?`<div class="resource-list">${videos.map((v,i)=>`<span class="resource-mini">🎬 Vídeo ${i+1}: ${esc(v.name||('Vídeo '+(i+1)))} <button onclick="deleteTestVideo('${l.id}','${v.id}')">×</button></span>`).join('')}</div>`:''}</div><div class="lesson-actions">${videos.length?`<label class="upload-label">↻ Reemplazar vídeo 1<input type="file" accept="video/mp4,video/webm,video/quicktime" data-video-action="replace" data-lesson-id="${l.id}" data-video-id="${videos[0].id}" hidden></label>`:''}<label class="upload-label">＋ Subir vídeo<input type="file" accept="video/mp4,video/webm,video/quicktime" data-video-action="add" data-lesson-id="${l.id}" hidden></label><label class="upload-label">＋ Recurso<input type="file" data-resource-lesson="${l.id}" hidden></label><button onclick="openAssessmentForm('lesson','${l.id}')">${l.assessment?'Evaluación':'＋ Evaluación'}</button><button onclick="openLessonForm('${l.moduleId}','${l.id}')">Editar</button><button onclick="toggleLessonStatus('${l.id}')">${l.status==='published'?'Ocultar':'Publicar'}</button><button class="danger-text" onclick="deleteLesson('${l.id}')">Eliminar</button></div></div>`}
@@ -733,6 +733,84 @@ async function bulkUploadPielPerfectaVideos(courseId,input){
   drawer('Resultado de la carga masiva',details+'<div class="drawer-actions"><button class="btn" onclick="closeDrawer()">Cerrar</button></div>');
 }
 
+
+function normalizePielPerfectaMaterialName(name=''){
+  return String(name).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[_-]+/g,' ').replace(/\s+/g,' ').trim();
+}
+function matchPielPerfectaMaterial(fileName,course){
+  const n=normalizePielPerfectaMaterialName(fileName);
+  const match=n.match(/modulo\s*0*(\d{1,2})\b/);
+  if(!match)return null;
+  const module=course.modules.find(m=>String(m.code||'').toUpperCase()==='M'+Number(match[1]));
+  if(!module)return null;
+  let kind=null;
+  if(/\bdiapositivas?\b/.test(n))kind='slides';
+  else if(/\bmanual\b|\bworkbook\b|\bbienvenida\b|\bproyecto\b/.test(n))kind='manual';
+  if(!kind)return {module,kind:null,lesson:null};
+  const lesson=(module.lessons||[]).slice().sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0))[0]||null;
+  return {module,kind,lesson};
+}
+async function uploadResourceFileDirect(lessonId,file){
+  const base64=await fileToBase64(file);
+  return api('/api/admin/resource',{method:'POST',body:JSON.stringify({lessonId,name:file.name,mime:file.type||'application/pdf',dataBase64:base64})});
+}
+async function bulkUploadPielPerfectaResources(courseId,input){
+  const course=findAdminCourse(courseId);if(!course){toast('Curso no encontrado','error');input.value='';return}
+  const files=[...(input.files||[])];if(!files.length)return;
+  const invalid=[],unmatched=[],ignored=[],duplicates=[],already=[],candidates=[];
+  const used=new Set();
+  for(const file of files){
+    const isPdf=file.type==='application/pdf'||/\.pdf$/i.test(file.name);
+    if(!isPdf||file.size>6_000_000){invalid.push(file.name);continue}
+    const hit=matchPielPerfectaMaterial(file.name,course);
+    if(!hit){unmatched.push(file.name);continue}
+    if(!hit.kind||!hit.lesson){ignored.push(file.name);continue}
+    const key=hit.module.code+':'+hit.kind;
+    if(used.has(key)){duplicates.push(file.name+' → '+hit.module.code);continue}
+    used.add(key);
+    const existing=(hit.lesson.resources||[]).some(r=>{
+      const rn=normalizePielPerfectaMaterialName(r.name||'');
+      return hit.kind==='slides'?/\bdiapositivas?\b/.test(rn):(/\bmanual\b|\bworkbook\b|\bbienvenida\b|\bproyecto\b/.test(rn));
+    });
+    if(existing){already.push(file.name+' → '+hit.module.code);continue}
+    candidates.push({file,lesson:hit.lesson,module:hit.module,kind:hit.kind});
+  }
+  const slides=candidates.filter(x=>x.kind==='slides').length;
+  const manuals=candidates.filter(x=>x.kind==='manual').length;
+  const lines=[
+    candidates.length+' PDFs listos para cargar ('+slides+' diapositivas · '+manuals+' manuales/workbooks).',
+    already.length?already.length+' materiales ya estaban cargados y se omitirán.':'',
+    ignored.length?ignored.length+' PDFs no son Diapositivas/Manual y se omitirán.':'',
+    unmatched.length?unmatched.length+' PDFs no tienen un módulo reconocible.':'',
+    duplicates.length?duplicates.length+' PDFs duplican el mismo tipo de material y se omitirán.':'',
+    invalid.length?invalid.length+' archivos no son PDF válido o superan 6 MB.':''
+  ].filter(Boolean);
+  if(!candidates.length){alert(lines.join('\n'));input.value='';return}
+  if(!confirm(lines.join('\n')+'\n\nSe adjuntarán a la primera clase de cada módulo. ¿Iniciar la carga?')){input.value='';return}
+  const ok=[],failed=[];
+  for(let i=0;i<candidates.length;i++){
+    const item=candidates[i];
+    try{
+      toast('PDF '+(i+1)+'/'+candidates.length+' · '+item.module.code+' · '+(item.kind==='slides'?'diapositivas':'manual'));
+      await uploadResourceFileDirect(item.lesson.id,item.file);
+      ok.push(item.module.code+' · '+item.file.name);
+    }catch(e){failed.push(item.module.code+' · '+item.file.name+' · '+e.message)}
+  }
+  input.value='';
+  await renderAdmin();
+  drawer('Resultado de materiales PDF',[
+    '<p><b>'+ok.length+' PDFs cargados correctamente.</b></p>',
+    ok.length?'<p>'+ok.map(esc).join('<br>')+'</p>':'',
+    already.length?'<p><b>Ya existentes:</b><br>'+already.map(esc).join('<br>')+'</p>':'',
+    ignored.length?'<p><b>Otros PDFs omitidos:</b><br>'+ignored.map(esc).join('<br>')+'</p>':'',
+    unmatched.length?'<p><b>Sin módulo reconocido:</b><br>'+unmatched.map(esc).join('<br>')+'</p>':'',
+    duplicates.length?'<p><b>Duplicados omitidos:</b><br>'+duplicates.map(esc).join('<br>')+'</p>':'',
+    invalid.length?'<p><b>No válidos:</b><br>'+invalid.map(esc).join('<br>')+'</p>':'',
+    failed.length?'<p><b>Fallos:</b><br>'+failed.map(esc).join('<br>')+'</p>':'',
+    '<div class="drawer-actions"><button class="btn" onclick="closeDrawer()">Cerrar</button></div>'
+  ].filter(Boolean).join(''));
+}
+
 async function deleteTestVideo(lessonId,videoId=''){if(!confirm('¿Quitar este vídeo de la clase?'))return;try{const qs=videoId?`?videoId=${encodeURIComponent(videoId)}`:'';await api(`/api/admin/video/${lessonId}${qs}`,{method:'DELETE'});toast('Vídeo eliminado');await renderAdmin()}catch(e){toast(e.message,'error')}}
 async function uploadResource(lessonId,input){const file=input.files?.[0];if(!file)return;if(file.size>6_000_000){toast('Máximo 6 MB por recurso en esta versión','error');input.value='';return}try{toast('Subiendo recurso…');const base64=await fileToBase64(file);await api('/api/admin/resource',{method:'POST',body:JSON.stringify({lessonId,name:file.name,mime:file.type||'application/octet-stream',dataBase64:base64})});toast('Recurso guardado');await renderAdmin()}catch(e){toast(e.message,'error')}finally{input.value=''}}
 function fileToBase64(file){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result).split(',')[1]||'');r.onerror=reject;r.readAsDataURL(file)})}
@@ -744,6 +822,7 @@ document.addEventListener('change',e=>{
   const input=e.target;
   if(!(input instanceof HTMLInputElement)||input.type!=='file')return;
   if(input.dataset.bulkVideoCourse){bulkUploadPielPerfectaVideos(input.dataset.bulkVideoCourse,input);return}
+  if(input.dataset.bulkMaterialCourse){bulkUploadPielPerfectaResources(input.dataset.bulkMaterialCourse,input);return}
   if(input.hasAttribute('data-course-transfer-file')){validatePielPerfectaTransferFile(input);return}
   if(input.dataset.videoAction){uploadTestVideo(input.dataset.lessonId,input,input.dataset.videoAction,input.dataset.videoId||'');return}
   if(input.dataset.resourceLesson){uploadResource(input.dataset.resourceLesson,input);return}
