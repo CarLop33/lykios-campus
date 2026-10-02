@@ -39,6 +39,7 @@ const RESEND_API_BASE = 'https://api.resend.com';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const UPLOAD_DIR = process.env.LYKIOS_UPLOAD_DIR || (process.env.VERCEL ? '/tmp/lykios-uploads' : path.join(__dirname, 'uploads'));
 const FILE_BACKEND = process.env.LYKIOS_FILE_BACKEND || (process.env.VERCEL ? 'blob' : 'fs');
+const RESOURCE_BACKEND = (ON_VERCEL && STORAGE_BACKEND==='postgres') ? 'postgres' : FILE_BACKEND;
 const VIDEO_PROVIDER = String(process.env.LYKIOS_VIDEO_PROVIDER || 'vercel').trim().toLowerCase();
 const BUNNY_STREAM_LIBRARY_ID = String(process.env.BUNNY_STREAM_LIBRARY_ID || '').trim();
 const BUNNY_STREAM_CDN_HOSTNAME = String(process.env.BUNNY_STREAM_CDN_HOSTNAME || '').trim();
@@ -76,11 +77,11 @@ if (IS_PROD) {
 }
 
 await mkdir(DATA_DIR, { recursive: true });
-if(FILE_BACKEND==='fs') await mkdir(UPLOAD_DIR, { recursive: true });
+if(RESOURCE_BACKEND==='fs') await mkdir(UPLOAD_DIR, { recursive: true });
 
 const persistence=createPersistence({backend:STORAGE_BACKEND,dataDir:DATA_DIR,dbFile:DB_FILE,databaseUrl:DATABASE_URL,log:logEvent});
 await persistence.init();
-const resourceStore=createResourceStore({backend:FILE_BACKEND,uploadDir:UPLOAD_DIR});
+const resourceStore=createResourceStore({backend:RESOURCE_BACKEND,uploadDir:UPLOAD_DIR,databaseUrl:DATABASE_URL});
 await resourceStore.init();
 
 
