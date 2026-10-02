@@ -1230,13 +1230,16 @@ function sequenceState(db,user,lesson){
     ?{locked:true,lockReason:`Completa primero la clase ${blocking.code}`,blockingLesson:{id:blocking.id,code:blocking.code,title:blocking.title}}
     :{locked:false,lockReason:null,blockingLesson:null};
 }
+function previewEnrolledAccess(db,user,courseId){
+  return Boolean(IS_PREVIEW&&user?.role==='student'&&db.enrollments.some(e=>e.userId===user.id&&e.courseId===courseId&&e.status==='active'));
+}
 function canAccessLesson(db,user,lesson){
   if(!lesson)return false;
   if(user.role==='admin')return true;
   if(user.role==='teacher')return canTeachCourse(db,user,lesson.courseId);
-  if(lesson.status!=='published')return false;
   const enrolled=db.enrollments.some(e=>e.userId===user.id&&e.courseId===lesson.courseId&&e.status==='active');
   if(!enrolled)return false;
+  if(lesson.status!=='published'&&!previewEnrolledAccess(db,user,lesson.courseId))return false;
   return !sequenceState(db,user,lesson).locked;
 }
 function lessonLastActivityAt(db,user,enrollment,lesson){
@@ -1253,12 +1256,14 @@ function compactLessonRef(lesson,module=null){
 }
 function coursePayload(db, user, slug='peeling-quimico'){
   const course=db.courses.find(c=>c.slug===slug);
-  if(!course || (user.role!=='admin' && course.status!=='published')) return null;
+  if(!course) return null;
   const enrollment=db.enrollments.find(e=>e.userId===user.id && e.courseId===course.id && e.status==='active');
-  const modules=db.modules.filter(m=>m.courseId===course.id && (user.role==='admin'||m.status==='published')).sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0)).map(m=>({
+  const previewDraftAccess=Boolean(IS_PREVIEW&&user.role==='student'&&enrollment);
+  if(user.role!=='admin'&&course.status!=='published'&&!previewDraftAccess) return null;
+  const modules=db.modules.filter(m=>m.courseId===course.id && (user.role==='admin'||m.status==='published'||previewDraftAccess)).sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0)).map(m=>({
     ...m,
     assessment:(()=>{const a=assessmentForScope(db,'module',m.id);return a&&a.status==='published'?{id:a.id,title:a.title,passingScore:a.passingScore,maxAttempts:a.maxAttempts}:null})(),
-    lessons:db.lessons.filter(l=>l.moduleId===m.id && (user.role==='admin'||l.status==='published')).sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0)).map(l=>{
+    lessons:db.lessons.filter(l=>l.moduleId===m.id && (user.role==='admin'||l.status==='published'||previewDraftAccess)).sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0)).map(l=>{
       const completion=(()=>{const st=lessonCompletionStatus(db,user,l);return {...st,completed:enrollment?lessonIsComplete(db,user,enrollment,l):false};})();
       const seq=sequenceState(db,user,l);
       const {video,videoId,videoName,videoMime,videoSize,videos:storedVideos,resources:storedResources,...publicLesson}=l;
