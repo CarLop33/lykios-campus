@@ -683,13 +683,20 @@ async function bulkUploadPielPerfectaVideos(courseId,input){
     const existing=lessonVideoList(lesson);
     if(existing.length){
       const first=existing[0];
-      const isLegacyBlob=String(first.ref||'').startsWith('blob:')||String(first.provider||'')==='blob';
-      if(isLegacyBlob){
+      const legacyEntry=existing.find(v=>String(v.ref||'').startsWith('blob:')||String(v.provider||'').toLowerCase()==='blob')||null;
+      const primaryRef=String(lesson.video||'');
+      const hasLegacyBlob=primaryRef.startsWith('blob:')||Boolean(legacyEntry);
+      if(hasLegacyBlob){
         migrations.push(file.name+' → '+lesson.code);
-        candidates.push({lesson,file,mode:'replace',videoId:first.id});
+        candidates.push({lesson,file,mode:'replace',videoId:(legacyEntry||first).id});
         continue;
       }
       already.push(file.name+' → '+lesson.code);continue;
+    }
+    if(String(lesson.video||'').startsWith('blob:')){
+      migrations.push(file.name+' → '+lesson.code);
+      candidates.push({lesson,file,mode:'replace',videoId:lesson.videoId||''});
+      continue;
     }
     candidates.push({lesson,file,mode:'add',videoId:''});
   }
