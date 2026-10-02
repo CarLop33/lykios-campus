@@ -1168,7 +1168,7 @@ function lessonCompletionStatus(db,user,lesson){
   const videosCompleted=videoStates.filter(v=>v.progress.completed).length;
   const videoPercent=videos.length?Math.round(videoStates.reduce((n,v)=>n+(Number(v.progress.percent)||0),0)/videos.length):100;
   const assessment=assessmentForScope(db,'lesson',lesson.id);
-  const assessmentRequired=Boolean(assessment&&assessment.status==='published');
+  const assessmentRequired=Boolean(assessment&&(assessment.status==='published'||previewEnrolledAccess(db,user,lesson.courseId)));
   const assessmentPassed=!assessmentRequired||db.attempts.some(a=>a.userId===user.id&&a.assessmentId===assessment.id&&a.passed);
   const hasRequirements=videos.length>0||assessmentRequired;
   const requirementsMet=(videos.length===0||videosCompleted===videos.length)&&assessmentPassed;
@@ -1273,7 +1273,7 @@ function coursePayload(db, user, slug='peeling-quimico'){
         videos:lessonVideos(l).map(v=>({id:v.id,name:v.name,mime:v.mime,size:v.size||null,position:v.position,createdAt:v.createdAt||null,progress:videoProgressPayload(db,user,l.id,v.id)})),
         videoProgress:videoProgressPayload(db,user,l.id),
         completionStatus:completion,
-        assessment:(()=>{const a=assessmentForScope(db,'lesson',l.id);return a&&a.status==='published'?{id:a.id,title:a.title,passingScore:a.passingScore,maxAttempts:a.maxAttempts,passed:db.attempts.some(x=>x.userId===user.id&&x.assessmentId===a.id&&x.passed)}:null})(),
+        assessment:(()=>{const a=assessmentForScope(db,'lesson',l.id);return a&&(a.status==='published'||previewDraftAccess)?{id:a.id,title:a.title,passingScore:a.passingScore,maxAttempts:a.maxAttempts,passed:db.attempts.some(x=>x.userId===user.id&&x.assessmentId===a.id&&x.passed)}:null})(),
         locked:seq.locked,
         lockReason:seq.lockReason,
         blockingLesson:seq.blockingLesson,
@@ -1388,29 +1388,35 @@ function assessmentPayload(db,assessment,{includeAnswers=false,userId=null}={}){
   return {...assessment,questions,attempts,attemptsUsed:rawAttempts.length,bestScore:rawAttempts.length?Math.max(...rawAttempts.map(a=>a.score)):null,passed:rawAttempts.some(a=>a.passed)};
 }
 function visibleAssessment(db,user,assessment){
-  if(!assessment || assessment.status!=='published') return false;
+  if(!assessment) return false;
   if(user.role==='admin') return true;
-  let courseId=null;
+  let courseId=null, lesson=null, module=null, course=null;
   if(assessment.scopeType==='lesson'){
-    const l=db.lessons.find(x=>x.id===assessment.scopeId);
-    if(!l || l.status!=='published') return false;
-    const m=db.modules.find(x=>x.id===l.moduleId);
-    const c=db.courses.find(x=>x.id===l.courseId);
-    if(!m||m.status!=='published'||!c||c.status!=='published') return false;
-    courseId=l.courseId;
+    lesson=db.lessons.find(x=>x.id===assessment.scopeId);
+    if(!lesson) return false;
+    module=db.modules.find(x=>x.id===lesson.moduleId);
+    course=db.courses.find(x=>x.id===lesson.courseId);
+    if(!module||!course) return false;
+    courseId=lesson.courseId;
   } else if(assessment.scopeType==='module'){
-    const m=db.modules.find(x=>x.id===assessment.scopeId);
-    if(!m||m.status!=='published') return false;
-    const c=db.courses.find(x=>x.id===m.courseId);
-    if(!c||c.status!=='published') return false;
-    courseId=m.courseId;
+    module=db.modules.find(x=>x.id===assessment.scopeId);
+    if(!module) return false;
+    course=db.courses.find(x=>x.id===module.courseId);
+    if(!course) return false;
+    courseId=module.courseId;
+  } else {
+    return false;
   }
-  if(assessment.scopeType==='lesson'){
-    const lesson=db.lessons.find(x=>x.id===assessment.scopeId);
-    return Boolean(lesson&&canAccessLesson(db,user,lesson));
+  const previewAccess=previewEnrolledAccess(db,user,courseId);
+  if(assessment.status!=='published'&&!previewAccess) return false;
+  if(!previewAccess){
+    if(course.status!=='published'||module.status!=='published') return false;
+    if(lesson&&lesson.status!=='published') return false;
   }
+  if(assessment.scopeType==='lesson') return Boolean(lesson&&canAccessLesson(db,user,lesson));
   return db.enrollments.some(e=>e.userId===user.id&&e.courseId===courseId&&e.status==='active');
 }
+
 function courseAssessmentStatus(db,user,courseId){
   const moduleIds=db.modules.filter(m=>m.courseId===courseId&&m.status==='published').map(m=>m.id);
   const lessonIds=db.lessons.filter(l=>l.courseId===courseId&&l.status==='published').map(l=>l.id);
