@@ -479,7 +479,7 @@ async function sendStudentReminder(userId,courseId){try{await api('/api/admin/em
 function renderAdminOrders(){const items=state.adminCommerce?.orders||[];if(!items.length)return '<div class="empty">Todavía no hay pedidos.</div>';return `<div class="cert-table-head"><span>Pedido</span><span>Alumno</span><span>Curso</span><span>Total</span><span>Estado</span></div>${items.map(o=>`<div class="cert-table-row"><span><b>${esc(o.number)}</b><small>${new Date(o.createdAt).toLocaleString('es-ES')}</small></span><span>${esc(o.studentName)}<small>${esc(o.email)}</small></span><span>${esc(o.courseTitle)}</span><span>${esc(o.totalLabel)}</span><span><span class="cert-valid">${esc(o.status)}</span></span></div>`).join('')}`};
 function renderAdminCertificates(){const items=state.adminCertificates||[];if(!items.length)return '<div class="empty">Todavía no hay certificados emitidos.</div>';return `<div class="cert-table-head"><span>Alumno</span><span>Curso</span><span>Código</span><span>Estado</span><span></span></div>${items.map(c=>`<div class="cert-table-row"><span><b>${esc(c.studentName)}</b><small>${new Date(c.issuedAt).toLocaleDateString('es-ES')}</small></span><span>${esc(c.courseTitle)}</span><span><a target="_blank" href="/verify/${encodeURIComponent(c.code)}">${esc(c.code)}</a></span><span>${c.status==='valid'?'<span class="cert-valid">Válido</span>':'<span class="cert-revoked">Revocado</span>'}</span><span>${c.status==='valid'?`<button class="icon-btn danger-soft" onclick="revokeCertificate('${c.id}')">Revocar</button>`:''}</span></div>`).join('')}`};
 async function revokeCertificate(id){if(!confirm('¿Revocar este certificado? La página pública mostrará que ya no es válido.'))return;try{await api(`/api/admin/certificate/${id}/revoke`,{method:'POST'});toast('Certificado revocado');await renderAdmin()}catch(e){toast(e.message,'error')}}
-function renderAdminCourse(c){const lessonCount=c.modules.flatMap(m=>m.lessons).length;const bulk=c.slug==='piel-perfecta-20'?`<div class="card" style="margin:14px 0;padding:16px"><div class="page-kicker">MIGRACIÓN PIEL PERFECTA</div><div style="display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap"><div><b>Carga masiva de vídeos</b><p class="muted" style="margin:4px 0 0">Selecciona todos los vídeos a la vez. El Campus los asignará por códigos como 0.1, 1.2 o nombres tipo “Módulo 3 Vídeo 2”. Los vídeos nuevos van directamente a Bunny Stream. Las clases que ya tengan vídeo se omiten para evitar duplicados.</p></div><div style="display:flex;gap:8px;flex-wrap:wrap"><label class="upload-label">⇧ Seleccionar vídeos<input type="file" multiple accept="video/mp4,video/webm,video/quicktime" data-bulk-video-course="${c.id}" hidden></label><button class="btn-secondary" onclick="publishPielPerfectaReady()">✓ Validar y publicar en Preview</button></div></div></div>`:'';return `<section class="admin-course card"><div class="admin-course-head"><div><div class="admin-code">${esc(c.slug)}</div><h2>${esc(c.title)}</h2><p>${esc(c.subtitle||'Sin subtítulo')}</p><div class="catalog-meta">${c.modules.length} módulos · ${lessonCount} clases · ${typeof c.priceCents==='number'?(c.priceCents/100).toLocaleString('es-ES',{style:'currency',currency:c.currency||'EUR'}):''} · ${statusPill(c.status)}</div></div><div class="action-group"><button class="icon-btn" title="Editar curso" onclick="openCourseForm('${c.id}')">✎</button><button class="icon-btn ${c.status==='published'?'danger-soft':'success-soft'}" onclick="toggleCourseStatus('${c.id}')">${c.status==='published'?'Ocultar':'Publicar'}</button><button class="icon-btn danger-soft" title="Eliminar curso" onclick="deleteCourse('${c.id}')">Eliminar</button></div></div>${bulk}
+function renderAdminCourse(c){const lessonCount=c.modules.flatMap(m=>m.lessons).length;const bulk=c.slug==='piel-perfecta-20'?`<div class="card" style="margin:14px 0;padding:16px"><div class="page-kicker">MIGRACIÓN PIEL PERFECTA</div><div style="display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap"><div><b>Carga masiva de vídeos</b><p class="muted" style="margin:4px 0 0">Selecciona todos los vídeos a la vez. El Campus los asignará por códigos como 0.1, 1.2 o nombres tipo “Módulo 3 Vídeo 2”. Los vídeos nuevos van directamente a Bunny Stream. Si una clase todavía usa el antiguo Vercel Blob, el Campus la migrará automáticamente a Bunny; las clases que ya estén en Bunny se omiten.</p></div><div style="display:flex;gap:8px;flex-wrap:wrap"><label class="upload-label">⇧ Seleccionar vídeos<input type="file" multiple accept="video/mp4,video/webm,video/quicktime" data-bulk-video-course="${c.id}" hidden></label><button class="btn-secondary" onclick="publishPielPerfectaReady()">✓ Validar y publicar en Preview</button></div></div></div>`:'';return `<section class="admin-course card"><div class="admin-course-head"><div><div class="admin-code">${esc(c.slug)}</div><h2>${esc(c.title)}</h2><p>${esc(c.subtitle||'Sin subtítulo')}</p><div class="catalog-meta">${c.modules.length} módulos · ${lessonCount} clases · ${typeof c.priceCents==='number'?(c.priceCents/100).toLocaleString('es-ES',{style:'currency',currency:c.currency||'EUR'}):''} · ${statusPill(c.status)}</div></div><div class="action-group"><button class="icon-btn" title="Editar curso" onclick="openCourseForm('${c.id}')">✎</button><button class="icon-btn ${c.status==='published'?'danger-soft':'success-soft'}" onclick="toggleCourseStatus('${c.id}')">${c.status==='published'?'Ocultar':'Publicar'}</button><button class="icon-btn danger-soft" title="Eliminar curso" onclick="deleteCourse('${c.id}')">Eliminar</button></div></div>${bulk}
 <div class="module-stack">${c.modules.map(m=>renderAdminModule(c,m)).join('')}<button class="add-row" onclick="openModuleForm('${c.id}')">＋ Añadir módulo</button></div></section>`}
 function renderAdminModule(c,m){return `<div class="admin-module"><div class="admin-module-head"><div><span class="module-code">${esc(m.code)}</span><b>${esc(m.title)}</b> ${statusPill(m.status)} ${m.assessment?`<span class="assessment-badge">Test ${m.assessment.status==='published'?'publicado':'borrador'}</span>`:''}</div><div class="mini-actions"><button onclick="openAssessmentForm('module','${m.id}')">${m.assessment?'Evaluación':'＋ Evaluación'}</button><button onclick="openModuleForm('${c.id}','${m.id}')">Editar</button><button onclick="toggleModuleStatus('${m.id}')">${m.status==='published'?'Despublicar':'Publicar'}</button><button class="danger-text" onclick="deleteModule('${m.id}')">Eliminar</button></div></div><div class="admin-lessons">${m.lessons.map(l=>renderAdminLesson(l)).join('')}<button class="add-lesson" onclick="openLessonForm('${m.id}')">＋ Nueva clase</button></div></div>`}
 function renderAdminLesson(l){const videos=lessonVideoList(l);return `<div class="admin-lesson"><div class="lesson-index">${esc(l.code)}</div><div class="lesson-info"><b>${esc(l.title)}</b><div class="lesson-meta">${l.durationMinutes} min · ${statusPill(l.status)} · ${(l.resources||[]).length} recursos · ${videos.length} vídeo${videos.length===1?'':'s'} ${l.assessment?`· <span class="assessment-badge">Test ${l.assessment.status==='published'?'publicado':'borrador'}</span>`:''}</div>${(l.resources||[]).length?`<div class="resource-list">${l.resources.map(r=>`<span class="resource-mini"><a target="_blank" href="/api/resource?id=${r.id}">${esc(r.name)}</a><button onclick="deleteResource('${r.id}')">×</button></span>`).join('')}</div>`:''}${videos.length?`<div class="resource-list">${videos.map((v,i)=>`<span class="resource-mini">🎬 Vídeo ${i+1}: ${esc(v.name||('Vídeo '+(i+1)))} <button onclick="deleteTestVideo('${l.id}','${v.id}')">×</button></span>`).join('')}</div>`:''}</div><div class="lesson-actions">${videos.length?`<label class="upload-label">↻ Reemplazar vídeo 1<input type="file" accept="video/mp4,video/webm,video/quicktime" data-video-action="replace" data-lesson-id="${l.id}" data-video-id="${videos[0].id}" hidden></label>`:''}<label class="upload-label">＋ Subir vídeo<input type="file" accept="video/mp4,video/webm,video/quicktime" data-video-action="add" data-lesson-id="${l.id}" hidden></label><label class="upload-label">＋ Recurso<input type="file" data-resource-lesson="${l.id}" hidden></label><button onclick="openAssessmentForm('lesson','${l.id}')">${l.assessment?'Evaluación':'＋ Evaluación'}</button><button onclick="openLessonForm('${l.moduleId}','${l.id}')">Editar</button><button onclick="toggleLessonStatus('${l.id}')">${l.status==='published'?'Ocultar':'Publicar'}</button><button class="danger-text" onclick="deleteLesson('${l.id}')">Eliminar</button></div></div>`}
@@ -653,12 +653,12 @@ function matchLessonForVideoFile(fileName,lessons){
   }
   return null;
 }
-async function uploadVideoFileDirect(lesson,file){
+async function uploadVideoFileDirect(lesson,file,mode='add',videoId=''){
   let prep=null,uploaded=false;
   try{
-    prep=await api('/api/admin/video/upload-url',{method:'POST',body:JSON.stringify({lessonId:lesson.id,name:file.name,mime:file.type,size:file.size,mode:'add',videoId:''})});
+    prep=await api('/api/admin/video/upload-url',{method:'POST',body:JSON.stringify({lessonId:lesson.id,name:file.name,mime:file.type,size:file.size,mode,videoId})});
     let shown=-20;
-    await uploadPreparedVideo(prep,file,p=>{if(p>=shown+10||p===100){shown=p;toast('Subiendo '+lesson.code+' a '+(prep.provider==='bunny'?'Bunny':'almacenamiento')+' · '+p+'%')}});
+    await uploadPreparedVideo(prep,file,p=>{if(p>=shown+10||p===100){shown=p;toast((mode==='replace'?'Migrando ':'Subiendo ')+lesson.code+' a '+(prep.provider==='bunny'?'Bunny':'almacenamiento')+' · '+p+'%')}});
     uploaded=true;
     return await completePreparedVideo(prep);
   }catch(error){
@@ -672,7 +672,7 @@ async function bulkUploadPielPerfectaVideos(courseId,input){
   const files=[...(input.files||[])];
   if(!files.length)return;
   const invalid=files.filter(f=>!['video/mp4','video/webm','video/quicktime'].includes(f.type)||f.size>2_000_000_000);
-  const candidates=[],unmatched=[],already=[],duplicates=[];
+  const candidates=[],unmatched=[],already=[],migrations=[],duplicates=[];
   const used=new Set();
   for(const file of files){
     if(invalid.includes(file))continue;
@@ -680,13 +680,24 @@ async function bulkUploadPielPerfectaVideos(courseId,input){
     if(!lesson){unmatched.push(file.name);continue}
     if(used.has(lesson.id)){duplicates.push(file.name+' → '+lesson.code);continue}
     used.add(lesson.id);
-    if(lessonVideoList(lesson).length){already.push(file.name+' → '+lesson.code);continue}
-    candidates.push({lesson,file});
+    const existing=lessonVideoList(lesson);
+    if(existing.length){
+      const first=existing[0];
+      const isLegacyBlob=String(first.ref||'').startsWith('blob:')||String(first.provider||'')==='blob';
+      if(isLegacyBlob){
+        migrations.push(file.name+' → '+lesson.code);
+        candidates.push({lesson,file,mode:'replace',videoId:first.id});
+        continue;
+      }
+      already.push(file.name+' → '+lesson.code);continue;
+    }
+    candidates.push({lesson,file,mode:'add',videoId:''});
   }
   const lines=[
-    candidates.length+' vídeos listos para subir.',
+    candidates.length+' vídeos listos para Bunny.',
+    migrations.length?migrations.length+' vídeos antiguos de Vercel se reemplazarán por Bunny.':'',
     unmatched.length?unmatched.length+' sin código reconocible.':'',
-    already.length?already.length+' clases ya tenían vídeo y se omitirán.':'',
+    already.length?already.length+' clases ya están en Bunny y se omitirán.':'',
     duplicates.length?duplicates.length+' archivos duplican una clase y se omitirán.':'',
     invalid.length?invalid.length+' archivos tienen formato/tamaño no permitido.':''
   ].filter(Boolean);
@@ -694,11 +705,11 @@ async function bulkUploadPielPerfectaVideos(courseId,input){
   if(!confirm(lines.join('\n')+'\n\n¿Iniciar la carga masiva?')){input.value='';return}
   const ok=[],failed=[];
   for(let i=0;i<candidates.length;i++){
-    const {lesson,file}=candidates[i];
+    const {lesson,file,mode,videoId}=candidates[i];
     try{
-      toast('Vídeo '+(i+1)+'/'+candidates.length+' · clase '+lesson.code);
-      await uploadVideoFileDirect(lesson,file);
-      ok.push(lesson.code+' · '+file.name);
+      toast((mode==='replace'?'Migrando ':'Vídeo ')+(i+1)+'/'+candidates.length+' · clase '+lesson.code);
+      await uploadVideoFileDirect(lesson,file,mode,videoId);
+      ok.push(lesson.code+' · '+file.name+(mode==='replace'?' · migrado a Bunny':''));
     }catch(e){failed.push(lesson.code+' · '+file.name+' · '+e.message)}
   }
   input.value='';
@@ -706,7 +717,8 @@ async function bulkUploadPielPerfectaVideos(courseId,input){
   const details=[
     '<p><b>'+ok.length+' vídeos cargados correctamente.</b></p>',
     unmatched.length?'<p><b>Sin asignar:</b><br>'+unmatched.map(esc).join('<br>')+'</p>':'',
-    already.length?'<p><b>Omitidos porque ya tenían vídeo:</b><br>'+already.map(esc).join('<br>')+'</p>':'',
+    migrations.length?'<p><b>Migrados desde Vercel Blob a Bunny:</b><br>'+migrations.map(esc).join('<br>')+'</p>':'',
+    already.length?'<p><b>Omitidos porque ya estaban en Bunny:</b><br>'+already.map(esc).join('<br>')+'</p>':'',
     duplicates.length?'<p><b>Duplicados omitidos:</b><br>'+duplicates.map(esc).join('<br>')+'</p>':'',
     invalid.length?'<p><b>Formato/tamaño no permitido:</b><br>'+invalid.map(x=>esc(x.name)).join('<br>')+'</p>':'',
     failed.length?'<p><b>Fallos:</b><br>'+failed.map(esc).join('<br>')+'</p>':''
