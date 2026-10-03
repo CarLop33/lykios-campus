@@ -863,7 +863,7 @@ document.addEventListener('change',e=>{
 // lista cerrada de acciones propias del Campus, sin eval ni unsafe-inline.
 const SAFE_CLICK_ACTIONS=new Set([
   'setRoute','logout','openForgotPassword','openStore','render','openCheckout','validateCoupon',
-  'openCourse','issueCertificate','openLesson','completeLesson','openAssessment','renderAssessment',
+  'openCourse','openResumeLesson','issueCertificate','openLesson','completeLesson','openAssessment','renderAssessment',
   'openTutorSource','sendTutorFeedback','openBundleForm','openCouponForm','openPromotionForm',
   'deleteMonetization','publishPielPerfectaReady','exportPielPerfectaTransfer','commitPielPerfectaTransfer','toggleVideoFullscreenByIndex','closeDrawer','openTeacherModuleForm','openTeacherLessonForm','openCourseForm',
   'openTeacherAdminForm','unassignTeacher','assignTeacher','openStudent','toggleStudentStatus','revokeStudentSessions','revokeStudentSession',
