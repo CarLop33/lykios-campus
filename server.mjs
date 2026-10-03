@@ -2581,17 +2581,78 @@ function verifyStripeWebhook(raw,signatureHeader){
   return signatures.some(sig=>{try{return sig.length===expected.length&&crypto.timingSafeEqual(Buffer.from(sig),Buffer.from(expected))}catch{return false}});
 }
 function markPaymentFailed(db,order,reason,providerRef=null){if(!order||order.status==='paid')return;order.status='payment_failed';order.paymentFailureReason=cleanText(reason,300);const payment=db.payments.find(p=>p.orderId===order.id);if(payment){payment.status='failed';payment.providerRef=providerRef||payment.providerRef;payment.failureReason=cleanText(reason,300);}}
+function applyStripeRefund(db,order,charge,eventId){
+  if(!order)return {error:'order_not_found'};
+  const amountRefunded=Math.max(0,Number(charge?.amount_refunded)||0);
+  const chargeAmount=Math.max(0,Number(charge?.amount)||Number(order.totalCents)||0);
+  const fullyRefunded=charge?.refunded===true||(chargeAmount>0&&amountRefunded>=chargeAmount);
+  const payment=db.payments.find(p=>p.orderId===order.id)||null;
+  order.refundedAmountCents=amountRefunded;
+  order.refundEventId=eventId||order.refundEventId||null;
+  if(payment){
+    payment.refundedAmountCents=amountRefunded;
+    payment.refundEventId=eventId||payment.refundEventId||null;
+  }
+  if(!fullyRefunded){
+    if(payment&&payment.status==='succeeded')payment.status='partially_refunded';
+    return {ok:true,partial:true,amountRefundedCents:amountRefunded};
+  }
+  if(order.status==='refunded'){
+    if(payment){payment.status='refunded';payment.refundedAt=payment.refundedAt||order.refundedAt||now();}
+    return {ok:true,alreadyRefunded:true,amountRefundedCents:amountRefunded};
+  }
+  const t=now();
+  order.status='refunded';
+  order.refundedAt=t;
+  if(payment){payment.status='refunded';payment.refundedAt=t;}
+  const revoked=[],preserved=[];
+  for(const courseId of order.lineCourseIds||[]){
+    const enrollment=db.enrollments.find(e=>e.userId===order.userId&&e.courseId===courseId);
+    if(!enrollment||enrollment.status!=='active')continue;
+    if(enrollment.orderId!==order.id){preserved.push(courseId);continue;}
+    const fallback=db.orders
+      .filter(o=>o.id!==order.id&&o.userId===order.userId&&o.status==='paid'&&(o.lineCourseIds||[]).includes(courseId))
+      .sort((a,b)=>new Date(b.paidAt||b.createdAt)-new Date(a.paidAt||a.createdAt))[0]||null;
+    if(fallback){
+      enrollment.orderId=fallback.id;
+      preserved.push(courseId);
+      continue;
+    }
+    enrollment.status='inactive';
+    enrollment.refundedAt=t;
+    enrollment.refundOrderId=order.id;
+    revoked.push(courseId);
+    const course=db.courses.find(c=>c.id===courseId);
+    db.activity.push({id:newId(),userId:order.userId,type:'enrollment_refunded',label:`Acceso retirado por reembolso: ${course?.title||order.itemTitle||'Curso'}`,at:t});
+    for(const cert of db.certificates||[]){
+      if(cert.userId===order.userId&&cert.courseId===courseId&&(cert.status||'valid')!=='revoked'){
+        cert.status='revoked';cert.revokedAt=t;cert.revocationReason='Pedido reembolsado';
+      }
+    }
+  }
+  return {ok:true,refunded:true,amountRefundedCents:amountRefunded,revokedCourseIds:revoked,preservedCourseIds:preserved};
+}
 async function handleStripeEvent(db,event){
   db.paymentEvents ||= []; if(db.paymentEvents.some(e=>e.provider==='stripe'&&e.eventId===event.id))return {duplicate:true};
-  const session=event?.data?.object||{}; const orderId=session?.metadata?.order_id||session?.client_reference_id; const order=db.orders.find(o=>o.id===orderId);
-  let result={ignored:true};
-  if(['checkout.session.completed','checkout.session.async_payment_succeeded'].includes(event.type)){
-    if(!order) result={error:'order_not_found'};
-    else if(Number(session.amount_total)!==Number(order.totalCents)||String(session.currency||'').toUpperCase()!==String(order.currency||'').toUpperCase()){markPaymentFailed(db,order,'Importe o moneda no coinciden',session.id);result={error:'amount_mismatch'};}
-    else if(event.type==='checkout.session.completed'&&session.payment_status!=='paid'){result={pending:true};}
-    else result=fulfillOrder(db,order,{providerRef:session.payment_intent||session.id,eventId:event.id});
-  } else if(['checkout.session.async_payment_failed','checkout.session.expired'].includes(event.type)){
-    if(order)markPaymentFailed(db,order,event.type,session.id); result={failed:true};
+  const object=event?.data?.object||{};
+  let order=null,result={ignored:true};
+  if(['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed','checkout.session.expired'].includes(event.type)){
+    const orderId=object?.metadata?.order_id||object?.client_reference_id;
+    order=db.orders.find(o=>o.id===orderId)||null;
+    if(['checkout.session.completed','checkout.session.async_payment_succeeded'].includes(event.type)){
+      if(!order) result={error:'order_not_found'};
+      else if(Number(object.amount_total)!==Number(order.totalCents)||String(object.currency||'').toUpperCase()!==String(order.currency||'').toUpperCase()){markPaymentFailed(db,order,'Importe o moneda no coinciden',object.id);result={error:'amount_mismatch'};}
+      else if(event.type==='checkout.session.completed'&&object.payment_status!=='paid'){result={pending:true};}
+      else result=fulfillOrder(db,order,{providerRef:object.payment_intent||object.id,eventId:event.id});
+    }else{
+      if(order)markPaymentFailed(db,order,event.type,object.id);
+      result={failed:true};
+    }
+  }else if(event.type==='charge.refunded'){
+    const paymentIntent=typeof object.payment_intent==='string'?object.payment_intent:object.payment_intent?.id;
+    const payment=(db.payments||[]).find(p=>p.provider==='stripe'&&(p.providerRef===paymentIntent||p.providerRef===object.id))||null;
+    order=payment?db.orders.find(o=>o.id===payment.orderId)||null:(db.orders||[]).find(o=>o.providerRef===paymentIntent)||null;
+    result=applyStripeRefund(db,order,object,event.id);
   }
   db.paymentEvents.push({id:newId(),provider:'stripe',eventId:event.id,type:event.type,orderId:order?.id||null,processedAt:now(),result});
   return result;
