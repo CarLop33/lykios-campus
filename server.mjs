@@ -21,7 +21,7 @@ const ADMIN_PASSWORD = process.env.LYKIOS_ADMIN_PASSWORD || '';
 const IS_SECURE = IS_PROD || ON_VERCEL;
 const APP_VERSION = process.env.LYKIOS_VERSION || '1.0.0-rc5';
 const APP_ORIGIN = (ON_VERCEL && VERCEL_ENV !== 'production' && process.env.VERCEL_URL) ? `https://${process.env.VERCEL_URL}` : (process.env.LYKIOS_APP_ORIGIN || `http://localhost:${PORT}`);
-const PUBLIC_APP_ORIGIN = (process.env.LYKIOS_PUBLIC_ORIGIN || process.env.LYKIOS_APP_ORIGIN || (IS_PREVIEW ? 'https://lykios-campus-git-preview-carlopsco-projects.vercel.app' : APP_ORIGIN)).replace(/\/$/,'');
+const PUBLIC_APP_ORIGIN = (IS_PROD ? 'https://lykios-campus.vercel.app' : (process.env.LYKIOS_PUBLIC_ORIGIN || process.env.LYKIOS_APP_ORIGIN || (IS_PREVIEW ? 'https://lykios-campus-git-preview-carlopsco-projects.vercel.app' : APP_ORIGIN))).replace(/\/$/,'');
 const TRUST_PROXY = process.env.LYKIOS_TRUST_PROXY === '1';
 const DATA_DIR = process.env.LYKIOS_DATA_DIR || (process.env.VERCEL ? '/tmp/lykios-data' : path.join(__dirname, 'data'));
 const DB_FILE = path.join(DATA_DIR, 'db.json');
