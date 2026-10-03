@@ -1185,9 +1185,14 @@ function lessonProgressRow(db,enrollment,lessonId){
 function lessonAssessmentUnlocked(db,user,lesson){
   if(!lesson)return false;
   if(user?.role==='admin'||user?.role==='teacher')return true;
+  const enrollment=db.enrollments.find(e=>e.userId===user.id&&e.courseId===lesson.courseId&&e.status==='active');
+  if(!enrollment)return false;
+  const siblings=db.lessons.filter(l=>l.moduleId===lesson.moduleId).sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0));
+  const index=siblings.findIndex(l=>l.id===lesson.id);
+  const previousComplete=(index<=0?[]:siblings.slice(0,index)).every(prev=>lessonIsComplete(db,user,enrollment,prev));
   const videos=lessonVideos(lesson);
-  if(!videos.length)return true;
-  return videos.every(v=>singleVideoProgress(db,user,lesson.id,v.id).completed);
+  const targetVideoComplete=!videos.length||videos.every(v=>singleVideoProgress(db,user,lesson.id,v.id).completed);
+  return previousComplete&&targetVideoComplete;
 }
 function lessonIsComplete(db,user,enrollment,lesson){
   const status=lessonCompletionStatus(db,user,lesson);
@@ -1230,7 +1235,11 @@ function sequenceState(db,user,lesson){
   if(!course||course.sequentialAccess!==true)return {locked:false,lockReason:null,blockingLesson:null};
   const enrollment=db.enrollments.find(e=>e.userId===user.id&&e.courseId===lesson.courseId&&e.status==='active');
   if(!enrollment)return {locked:true,lockReason:'Sin matrícula activa',blockingLesson:null};
-  const ordered=orderedPublishedLessons(db,lesson.courseId);
+  const previewSequence=IS_PREVIEW&&user.role==='student'&&Boolean(enrollment);
+  const ordered=previewSequence
+    ? db.modules.filter(m=>m.courseId===lesson.courseId).sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0))
+        .flatMap(m=>db.lessons.filter(l=>l.moduleId===m.id).sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0)))
+    : orderedPublishedLessons(db,lesson.courseId);
   const index=ordered.findIndex(l=>l.id===lesson.id);
   if(index<=0)return {locked:false,lockReason:null,blockingLesson:null};
   const blocking=ordered.slice(0,index).find(prev=>!lessonIsComplete(db,user,enrollment,prev));
