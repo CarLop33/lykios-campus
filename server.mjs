@@ -2964,7 +2964,7 @@ export const handleRequest=async (req,res)=>{
         user.lastLoginAt=now();
         try{
           await writeDb(db);
-          return json(res,200,{user:{id:user.id,email:user.email,firstName:user.firstName,lastName:user.lastName,role:user.role,status:user.status||'active'},session:{maxActive:user.role==='student'?MAX_STUDENT_SESSIONS:null,deviceLabel:managed.session.deviceLabel}},{'set-cookie':sessionCookie(managed.token)});
+          return json(res,200,{user:{id:user.id,email:user.email,firstName:user.firstName,lastName:user.lastName,role:user.role,status:user.status||'active',preview:IS_PREVIEW},session:{maxActive:user.role==='student'?MAX_STUDENT_SESSIONS:null,deviceLabel:managed.session.deviceLabel}},{'set-cookie':sessionCookie(managed.token)});
         }catch(err){
           if(err?.code==='STORAGE_CONFLICT'&&attempt<2)continue;
           throw err;
@@ -3034,7 +3034,7 @@ export const handleRequest=async (req,res)=>{
     if(url.pathname.startsWith('/api/')){
       const db=await readDb(); const user=await auth(req,db);
       if(!user) return json(res,401,{error:'No autenticado'});
-      if(url.pathname==='/api/me') return json(res,200,{id:user.id,email:user.email,firstName:user.firstName,lastName:user.lastName,role:user.role,status:user.status||'active'});
+      if(url.pathname==='/api/me') return json(res,200,{id:user.id,email:user.email,firstName:user.firstName,lastName:user.lastName,role:user.role,status:user.status||'active',preview:IS_PREVIEW});
       if(url.pathname==='/api/password/change' && req.method==='POST'){
         const rl=rateLimit(`change-password:${user.id}`,6,15*60*1000);if(!rl.ok)return json(res,429,{error:'Demasiados intentos. Prueba más tarde.'});
         const body=await readBody(req);const currentPassword=String(body.currentPassword||''),newPassword=String(body.newPassword||'');
@@ -3618,6 +3618,55 @@ export const handleRequest=async (req,res)=>{
         if(studentEnrollmentDelete&&req.method==='DELETE'){const studentId=studentEnrollmentDelete[1],courseId=studentEnrollmentDelete[2];const e=db.enrollments.find(x=>x.userId===studentId&&x.courseId===courseId);if(!e)return json(res,404,{error:'Matrícula no encontrada'});e.status='inactive';await writeDb(db);return json(res,200,{ok:true});}
         const studentNoteMatch=url.pathname.match(/^\/api\/admin\/student\/([^/]+)\/note$/);
         if(studentNoteMatch&&req.method==='POST'){const student=db.users.find(u=>u.id===studentNoteMatch[1]&&u.role==='student');if(!student)return json(res,404,{error:'Alumno no encontrado'});const body=await readBody(req);const note=cleanText(body.note,3000);if(!note)return json(res,400,{error:'La nota está vacía'});const item={id:newId(),userId:student.id,note,createdAt:now(),authorId:user.id};db.studentNotes ||= [];db.studentNotes.push(item);await writeDb(db);return json(res,201,{note:item});}
+        const studentQaM10Match=url.pathname.match(/^\/api\/admin\/student\/([^/]+)\/course\/([^/]+)\/qa-unlock-m10$/);
+        if(studentQaM10Match&&req.method==='POST'){
+          if(!IS_PREVIEW)return json(res,404,{error:'Herramienta QA disponible solo en Preview'});
+          const studentId=studentQaM10Match[1],courseId=studentQaM10Match[2];
+          const student=db.users.find(u=>u.id===studentId&&u.role==='student');
+          if(!student)return json(res,404,{error:'Alumno no encontrado'});
+          const course=db.courses.find(c=>c.id===courseId);
+          if(!course||course.slug!=='piel-perfecta-20')return json(res,400,{error:'QA M10 solo disponible para Piel Perfecta 2.0'});
+          const enrollment=db.enrollments.find(e=>e.userId===studentId&&e.courseId===courseId&&e.status==='active');
+          if(!enrollment)return json(res,404,{error:'Matrícula activa no encontrada'});
+          const modules=db.modules.filter(m=>m.courseId===courseId).sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0));
+          const finalModule=modules.find(m=>m.code==='M10');
+          if(!finalModule)return json(res,404,{error:'Módulo 10 no encontrado'});
+          const finalLessons=db.lessons.filter(l=>l.moduleId===finalModule.id).sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0));
+          const firstFinal=finalLessons[0];
+          if(!firstFinal)return json(res,404,{error:'Módulo 10 sin clases'});
+          const priorModuleIds=new Set(modules.filter(m=>(Number(m.position)||0)<(Number(finalModule.position)||0)).map(m=>m.id));
+          const priorLessons=db.lessons.filter(l=>priorModuleIds.has(l.moduleId));
+          const priorLessonIds=new Set(priorLessons.map(l=>l.id));
+          const finalLessonIds=new Set(finalLessons.map(l=>l.id));
+          db.videoProgress=(db.videoProgress||[]).filter(v=>!(v.userId===studentId&&finalLessonIds.has(v.lessonId)));
+          db.progress=db.progress.filter(p=>!(p.enrollmentId===enrollment.id&&finalLessonIds.has(p.lessonId)));
+          const finalAssessmentIds=new Set(db.assessments.filter(a=>a.scopeType==='lesson'&&finalLessonIds.has(a.scopeId)).map(a=>a.id));
+          db.attempts=db.attempts.filter(a=>!(a.userId===studentId&&finalAssessmentIds.has(a.assessmentId)));
+          for(const lesson of priorLessons){
+            for(const video of lessonVideos(lesson)){
+              let vp=db.videoProgress.find(v=>v.userId===studentId&&v.lessonId===lesson.id&&String(v.videoId||'')===String(video.id||''));
+              if(!vp){
+                vp={id:newId(),userId:studentId,lessonId:lesson.id,videoId:video.id,currentTime:1,duration:1,percent:100,completed:true,lastPlayedAt:now()};
+                db.videoProgress.push(vp);
+              }else{
+                vp.currentTime=Math.max(1,Number(vp.duration)||Number(vp.currentTime)||1);
+                vp.duration=Math.max(1,Number(vp.duration)||1);
+                vp.percent=100;vp.completed=true;vp.lastPlayedAt=now();
+              }
+            }
+            const assessment=assessmentForScope(db,'lesson',lesson.id);
+            if(assessment&&!db.attempts.some(a=>a.userId===studentId&&a.assessmentId===assessment.id&&a.passed)){
+              const questions=db.questions.filter(q=>q.assessmentId===assessment.id).sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0));
+              const answers=questions.map(q=>({questionId:q.id,selectedOption:q.correctOption,correct:true,correctOption:q.correctOption,explanation:q.explanation||''}));
+              db.attempts.push({id:newId(),assessmentId:assessment.id,userId:studentId,score:100,passed:true,answers,submittedAt:now(),source:'preview_qa'});
+            }
+            syncLessonCompletion(db,student,lesson);
+          }
+          db.activity.push({id:newId(),userId:studentId,type:'preview_qa',label:'QA Preview: acceso preparado hasta Módulo 10',at:now()});
+          await writeDb(db);
+          return json(res,200,{ok:true,nextLesson:{id:firstFinal.id,code:firstFinal.code,title:firstFinal.title}});
+        }
+
         const studentResetMatch=url.pathname.match(/^\/api\/admin\/student\/([^/]+)\/course\/([^/]+)\/reset-progress$/);
         if(studentResetMatch&&req.method==='POST'){const studentId=studentResetMatch[1],courseId=studentResetMatch[2];const enrollment=db.enrollments.find(e=>e.userId===studentId&&e.courseId===courseId);if(!enrollment)return json(res,404,{error:'Matrícula no encontrada'});const lessonIds=db.lessons.filter(l=>l.courseId===courseId).map(l=>l.id);db.progress=db.progress.filter(p=>!(p.enrollmentId===enrollment.id&&lessonIds.includes(p.lessonId)));db.videoProgress=db.videoProgress.filter(v=>!(v.userId===studentId&&lessonIds.includes(v.lessonId)));const assessmentIds=db.assessments.filter(a=>(a.scopeType==='lesson'&&lessonIds.includes(a.scopeId))||(a.scopeType==='module'&&db.modules.some(m=>m.id===a.scopeId&&m.courseId===courseId))).map(a=>a.id);db.attempts=db.attempts.filter(a=>!(a.userId===studentId&&assessmentIds.includes(a.assessmentId)));await writeDb(db);return json(res,200,{ok:true});}
 
