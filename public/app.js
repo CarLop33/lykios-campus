@@ -460,7 +460,17 @@ async function revokeStudentSession(id,sessionId){if(!confirm('¿Cerrar esta ses
 
 async function manualEnroll(id){const courseId=$('#manualCourseSelect')?.value;if(!courseId)return toast('Selecciona un curso','error');try{await api(`/api/admin/student/${id}/enrollment`,{method:'POST',body:JSON.stringify({courseId})});toast('Matrícula activada');await refreshAdmin();await openStudent(id)}catch(e){toast(e.message,'error')}}
 async function removeEnrollment(id,courseId){if(!confirm('¿Retirar el acceso a este curso? El histórico se conserva.'))return;try{await api(`/api/admin/student/${id}/enrollment/${courseId}`,{method:'DELETE'});toast('Acceso retirado');await refreshAdmin();await openStudent(id)}catch(e){toast(e.message,'error')}}
-async function qaUnlockM10(id,courseId){\n  if(!confirm('QA Preview: se marcarán como completados los módulos anteriores para desbloquear M10 en esta cuenta de prueba. ¿Continuar?'))return;\n  try{\n    const r=await api(`/api/admin/student/${id}/course/${courseId}/qa-unlock-m10`,{method:'POST'});\n    toast('QA preparado · M10 desbloqueado');\n    await refreshAdmin();\n    await openStudent(id);\n    return r;\n  }catch(e){toast(e.message,'error')}\n}\nasync function resetStudentProgress(id,courseId){if(!confirm('¿Reiniciar progreso e intentos de evaluación de este curso? Esta acción no se puede deshacer.'))return;try{await api(`/api/admin/student/${id}/course/${courseId}/reset-progress`,{method:'POST'});toast('Progreso reiniciado');await refreshAdmin();await openStudent(id)}catch(e){toast(e.message,'error')}}
+async function qaUnlockM10(id,courseId){
+  if(!confirm('QA Preview: se marcarán como completados los módulos anteriores para desbloquear M10 en esta cuenta de prueba. ¿Continuar?'))return;
+  try{
+    const r=await api(`/api/admin/student/${id}/course/${courseId}/qa-unlock-m10`,{method:'POST'});
+    toast('QA preparado · M10 desbloqueado');
+    await refreshAdmin();
+    await openStudent(id);
+    return r;
+  }catch(e){toast(e.message,'error')}
+}
+async function resetStudentProgress(id,courseId){if(!confirm('¿Reiniciar progreso e intentos de evaluación de este curso? Esta acción no se puede deshacer.'))return;try{await api(`/api/admin/student/${id}/course/${courseId}/reset-progress`,{method:'POST'});toast('Progreso reiniciado');await refreshAdmin();await openStudent(id)}catch(e){toast(e.message,'error')}}
 async function addStudentNote(e,id){e.preventDefault();const note=new FormData(e.target).get('note');try{await api(`/api/admin/student/${id}/note`,{method:'POST',body:JSON.stringify({note})});toast('Nota guardada');await refreshAdmin();await openStudent(id)}catch(err){toast(err.message,'error')}}
 function renderAdminEmails(){
   const items=state.adminEmails||[];
