@@ -1182,6 +1182,13 @@ function lessonCompletionStatus(db,user,lesson){
 function lessonProgressRow(db,enrollment,lessonId){
   return db.progress.find(p=>p.enrollmentId===enrollment.id&&p.lessonId===lessonId)||null;
 }
+function lessonAssessmentUnlocked(db,user,lesson){
+  if(!lesson)return false;
+  if(user?.role==='admin'||user?.role==='teacher')return true;
+  const videos=lessonVideos(lesson);
+  if(!videos.length)return true;
+  return videos.every(v=>singleVideoProgress(db,user,lesson.id,v.id).completed);
+}
 function lessonIsComplete(db,user,enrollment,lesson){
   const status=lessonCompletionStatus(db,user,lesson);
   if(status.hasRequirements)return status.requirementsMet;
@@ -1274,7 +1281,7 @@ function coursePayload(db, user, slug='peeling-quimico'){
         videos:lessonVideos(l).map(v=>({id:v.id,name:v.name,mime:v.mime,size:v.size||null,position:v.position,createdAt:v.createdAt||null,progress:videoProgressPayload(db,user,l.id,v.id)})),
         videoProgress:videoProgressPayload(db,user,l.id),
         completionStatus:completion,
-        assessment:(()=>{const a=assessmentForScope(db,'lesson',l.id);return a&&(a.status==='published'||previewDraftAccess)?{id:a.id,title:a.title,passingScore:a.passingScore,maxAttempts:a.maxAttempts,passed:db.attempts.some(x=>x.userId===user.id&&x.assessmentId===a.id&&x.passed)}:null})(),
+        assessment:(()=>{const a=assessmentForScope(db,'lesson',l.id);if(!a||!(a.status==='published'||previewDraftAccess))return null;const passed=db.attempts.some(x=>x.userId===user.id&&x.assessmentId===a.id&&x.passed);return {id:a.id,title:a.title,passingScore:a.passingScore,maxAttempts:a.maxAttempts,passed,unlocked:passed||lessonAssessmentUnlocked(db,user,l)};})(),
         locked:seq.locked,
         lockReason:seq.lockReason,
         blockingLesson:seq.blockingLesson,
@@ -1414,7 +1421,11 @@ function visibleAssessment(db,user,assessment){
     if(course.status!=='published'||module.status!=='published') return false;
     if(lesson&&lesson.status!=='published') return false;
   }
-  if(assessment.scopeType==='lesson') return Boolean(lesson&&canAccessLesson(db,user,lesson));
+  if(assessment.scopeType==='lesson'){
+    if(!lesson||!canAccessLesson(db,user,lesson))return false;
+    if(user.role==='student'&&!lessonAssessmentUnlocked(db,user,lesson))return false;
+    return true;
+  }
   return db.enrollments.some(e=>e.userId===user.id&&e.courseId===courseId&&e.status==='active');
 }
 
