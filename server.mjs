@@ -3367,9 +3367,63 @@ export const handleRequest=async (req,res)=>{
               performMockCheckout(checkoutBody,{suppressEmails:true})
             ]);
 
-            const afterCheckout=await readDb();
-            const syntheticUser=afterCheckout.users.find(u=>u.email===email);
+            let afterCheckout=await readDb();
+            let syntheticUser=afterCheckout.users.find(u=>u.email===email);
             if(!syntheticUser)throw new Error('La prueba no pudo crear el alumno sintético');
+
+            // La prueba concurrente verifica escrituras simultáneas, no el
+            // desbloqueo pedagógico. Si la evaluación elegida pertenece a una
+            // clase secuencial, preparamos únicamente al alumno sintético hasta
+            // esa clase para que el test respete las mismas reglas que un alumno real.
+            if(assessment.scopeType==='lesson'){
+              const targetLesson=afterCheckout.lessons.find(l=>l.id===assessment.scopeId);
+              if(!targetLesson)throw new Error('No se encontró la clase de la evaluación concurrente');
+              const ordered=afterCheckout.modules
+                .filter(m=>m.courseId===course.id)
+                .sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0))
+                .flatMap(m=>afterCheckout.lessons
+                  .filter(l=>l.moduleId===m.id)
+                  .sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0)));
+              const targetIndex=ordered.findIndex(l=>l.id===targetLesson.id);
+              const priorLessons=targetIndex>0?ordered.slice(0,targetIndex):[];
+              const markVideosComplete=(lesson)=>{
+                for(const video of lessonVideos(lesson)){
+                  let vp=afterCheckout.videoProgress.find(v=>v.userId===syntheticUser.id&&v.lessonId===lesson.id&&String(v.videoId||'')===String(video.id||''));
+                  if(!vp){
+                    vp={id:newId(),userId:syntheticUser.id,lessonId:lesson.id,videoId:video.id,currentTime:1,duration:1,percent:100,completed:true,lastPlayedAt:now()};
+                    afterCheckout.videoProgress.push(vp);
+                  }else{
+                    vp.currentTime=Math.max(1,Number(vp.duration)||Number(vp.currentTime)||1);
+                    vp.duration=Math.max(1,Number(vp.duration)||1);
+                    vp.percent=100;vp.completed=true;vp.lastPlayedAt=now();
+                  }
+                }
+              };
+              for(const lesson of priorLessons){
+                markVideosComplete(lesson);
+                const priorAssessment=assessmentForScope(afterCheckout,'lesson',lesson.id);
+                if(priorAssessment&&!afterCheckout.attempts.some(a=>a.userId===syntheticUser.id&&a.assessmentId===priorAssessment.id&&a.passed)){
+                  const priorQuestions=afterCheckout.questions.filter(q=>q.assessmentId===priorAssessment.id).sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0));
+                  const answers=priorQuestions.map(q=>({questionId:q.id,selectedOption:q.correctOption,correct:true,correctOption:q.correctOption,explanation:q.explanation||''}));
+                  afterCheckout.attempts.push({id:newId(),assessmentId:priorAssessment.id,userId:syntheticUser.id,score:100,passed:true,answers,submittedAt:now(),source:'concurrency_qa'});
+                }
+                const synced=syncLessonCompletion(afterCheckout,syntheticUser,lesson);
+                if(!synced.status.hasRequirements){
+                  const enrollment=afterCheckout.enrollments.find(e=>e.userId===syntheticUser.id&&e.courseId===lesson.courseId&&e.status==='active');
+                  if(enrollment){
+                    let p=lessonProgressRow(afterCheckout,enrollment,lesson.id);
+                    if(!p){p={id:newId(),enrollmentId:enrollment.id,lessonId:lesson.id,completed:true,progressPercent:100,updatedAt:now(),completedAt:now(),completionMode:'concurrency_qa'};afterCheckout.progress.push(p)}
+                    else {p.completed=true;p.progressPercent=100;p.updatedAt=now();p.completedAt=p.completedAt||now();p.completionMode='concurrency_qa'}
+                  }
+                }
+              }
+              markVideosComplete(targetLesson);
+              syncLessonCompletion(afterCheckout,syntheticUser,targetLesson);
+              await writeDb(afterCheckout);
+              afterCheckout=await readDb();
+              syntheticUser=afterCheckout.users.find(u=>u.email===email);
+              if(!syntheticUser)throw new Error('El alumno sintético desapareció durante la preparación de la prueba');
+            }
 
             const visible=visibleAssessment(afterCheckout,syntheticUser,afterCheckout.assessments.find(a=>a.id===assessment.id));
             if(!visible)throw new Error('La evaluación de prueba no quedó accesible para el alumno sintético');
