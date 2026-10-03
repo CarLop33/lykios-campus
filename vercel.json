@@ -1,18 +1,18 @@
 {
   "version": 2,
   "functions": {
-    "api/index.mjs": {
+    "api/**/*.mjs": {
       "maxDuration": 60
     }
   },
   "rewrites": [
     {
-      "source": "/api/:path*",
-      "destination": "/api/index"
+      "source": "/verify",
+      "destination": "/api/verify"
     },
     {
       "source": "/verify/:path*",
-      "destination": "/api/index"
+      "destination": "/api/verify/:path*"
     },
     {
       "source": "/login",

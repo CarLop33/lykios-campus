@@ -6,8 +6,9 @@
   "scripts": {
     "start": "node server.mjs",
     "check": "node --check server.mjs",
-    "smoke": "sh scripts/smoke-test.sh",
-    "backup": "sh scripts/backup.sh",
+    "smoke": "node scripts/smoke-test.mjs",
+    "backup": "node scripts/backup-state.mjs",
+    "restore": "node scripts/restore-state.mjs",
     "db:import": "node scripts/migrate-json-to-postgres.mjs",
     "db:verify": "node scripts/verify-postgres.mjs",
     "vercel:check": "node --check api/index.mjs && node --check server.mjs && node --check resource-store.mjs",
@@ -21,6 +22,7 @@
   "dependencies": {
     "pg": "8.13.1",
     "@vercel/blob": "2.8.0",
-    "qrcode": "1.5.4"
+    "qrcode": "1.5.4",
+    "pdf-lib": "1.17.1"
   }
 }

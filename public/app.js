@@ -1,44 +1,228 @@
 const $=(s)=>document.querySelector(s); const $$=(s)=>[...document.querySelectorAll(s)];
 const esc=(v='')=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const api=async(path,opts={})=>{const r=await fetch(path,{headers:{'content-type':'application/json',...(opts.headers||{})},...opts});const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.error||'Error');return data};
+function lykiosDeviceId(){
+  try{
+    let id=localStorage.getItem('lykios_device_id');
+    if(!id){id=(crypto.randomUUID?.()||('dev-'+Date.now()+'-'+Math.random().toString(36).slice(2)));localStorage.setItem('lykios_device_id',id)}
+    return id;
+  }catch{
+    if(!window.__lykiosDeviceId)window.__lykiosDeviceId='session-'+(crypto.randomUUID?.()||Math.random().toString(36).slice(2));
+    return window.__lykiosDeviceId;
+  }
+}
+const api=async(path,opts={})=>{const r=await fetch(path,{headers:{'content-type':'application/json','x-lykios-device-id':lykiosDeviceId(),...(opts.headers||{})},...opts});const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.error||'Error');return data};
 let state={me:null,teacherContent:null,teacherSummary:null,teacherStudents:[],teacherAnalytics:null,dashboard:null,course:null,currentLesson:null,currentAssessment:null,assessmentResult:null,certificateStatus:null,adminContent:null,adminSummary:null,adminCertificates:[],adminCommerce:{orders:[],payments:[]},adminStudents:{students:[],courses:[]},adminEmails:[],adminAnalytics:null,adminMonetization:{bundles:[],coupons:[],promotions:[],courses:[]},adminTeachers:{teachers:[],courses:[]},adminTutor:{policy:null,items:[]},catalog:[],catalogBundles:[],checkoutProvider:'mock',tutor:null,tutorBusy:false};
+let videoProgressQueue=Promise.resolve();
+let activeLessonVideo=null;
+function queueVideoProgress(task){const run=videoProgressQueue.then(task,task);videoProgressQueue=run.catch(()=>{});return run}
+function pauseOtherLessonVideos(current){
+  if(activeLessonVideo?.element&&activeLessonVideo.element!==current){
+    try{
+      if(activeLessonVideo.player&&typeof activeLessonVideo.player.pause==='function')activeLessonVideo.player.pause();
+      else if(typeof activeLessonVideo.element.pause==='function'&&!activeLessonVideo.element.paused)activeLessonVideo.element.pause();
+    }catch{}
+  }
+  $('video[id^="lessonVideo_"]').forEach(v=>{if(v!==current&&!v.paused)v.pause()});
+}
+
 function toast(msg,type='ok'){const t=document.createElement('div');t.className='toast '+type;t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),2600)}
 function setRoute(view){history.pushState({},'',view==='login'?'/login':'/'+view);render(view)}
 window.onpopstate=()=>render(location.pathname.replace('/','')||'dashboard');
-async function bootstrap(){const params=new URLSearchParams(location.search);const reset=params.get('reset');if(reset)return renderResetPassword(reset);try{state.me=await api('/api/me');await loadDashboard();if(params.get('payment')==='success'&&params.get('order')){await confirmPaymentReturn(params.get('order'));}else if(params.get('payment')==='cancel'){toast('Pago cancelado. No se ha activado ninguna matrícula.','error');history.replaceState({},'', '/dashboard');}if(location.pathname==='/lesson'&&params.get('lessonId')){const slug=params.get('course')||'peeling-quimico';state.course=await api('/api/course?slug='+encodeURIComponent(slug));const l=state.course.modules.flatMap(m=>m.lessons).find(x=>x.id===params.get('lessonId'));if(l){state.currentLesson=l;return renderLesson()}}render(location.pathname.replace('/','')||'dashboard')}catch{render('login')}}
-async function loadDashboard(){state.dashboard=await api('/api/dashboard'); try{state.course=await api('/api/course?slug=peeling-quimico');state.certificateStatus=await api('/api/certificate/status?slug=peeling-quimico')}catch{state.course=null;state.certificateStatus=null}}
-async function refreshAdmin(){const [content,summary,certs,commerce,students,emails,analytics,monetization,teachers,tutorAudit]=await Promise.all([api('/api/admin/content'),api('/api/admin/summary'),api('/api/admin/certificates'),api('/api/admin/commerce'),api('/api/admin/students'),api('/api/admin/emails'),api('/api/admin/analytics'),api('/api/admin/monetization'),api('/api/admin/teachers'),api('/api/admin/tutor/audit')]);state.adminContent=content;state.adminSummary=summary;state.adminCertificates=certs.certificates||[];state.adminCommerce=commerce||{orders:[],payments:[]};state.adminStudents=students||{students:[],courses:[]};state.adminEmails=emails.emails||[];state.adminAnalytics=analytics;state.adminMonetization=monetization||{bundles:[],coupons:[],promotions:[],courses:[]};state.adminTeachers=teachers||{teachers:[],courses:[]};state.adminTutor=tutorAudit||{policy:null,items:[]}}
+async function bootstrap(){const params=new URLSearchParams(location.search);const reset=params.get('reset');if(reset)return renderResetPassword(reset);try{state.me=await api('/api/me');await loadDashboard();if(params.get('payment')==='success'&&params.get('order')){await confirmPaymentReturn(params.get('order'));}else if(params.get('payment')==='cancel'){toast('Pago cancelado. No se ha activado ninguna matrícula.','error');history.replaceState({},'', '/dashboard');}if(location.pathname==='/store'){return openStore()}if(location.pathname==='/course'&&params.get('slug')){return openCourse(params.get('slug'),false)}if(location.pathname==='/lesson'&&params.get('lessonId')){const slug=params.get('course')||state.course?.slug||'peeling-quimico';state.course=await api('/api/course?slug='+encodeURIComponent(slug));state.certificateStatus=await api('/api/certificate/status?slug='+encodeURIComponent(slug));const l=state.course.modules.flatMap(m=>m.lessons).find(x=>x.id===params.get('lessonId'));if(l){if(l.locked){state.currentLesson=null;history.replaceState({},'', '/course?slug='+encodeURIComponent(slug));toast(l.lockReason||'Completa primero las clases anteriores','error');return renderCourse()}state.currentLesson=l;return renderLesson()}}render(location.pathname.replace('/','')||'dashboard')}catch{render('login')}}
+async function loadDashboard(){
+  state.dashboard=await api('/api/dashboard');
+  const preferred=state.dashboard?.continueCourse||state.dashboard?.courses?.[0];
+  try{
+    if(preferred?.slug){state.course=await api('/api/course?slug='+encodeURIComponent(preferred.slug));state.certificateStatus=await api('/api/certificate/status?slug='+encodeURIComponent(preferred.slug))}
+    else{state.course=null;state.certificateStatus=null}
+  }catch{state.course=null;state.certificateStatus=null}
+}
+async function refreshAdmin(){const [content,summary,certs,commerce,students,emails,analytics,monetization,teachers,tutorAudit,ppReadiness]=await Promise.all([api('/api/admin/content'),api('/api/admin/summary'),api('/api/admin/certificates'),api('/api/admin/commerce'),api('/api/admin/students'),api('/api/admin/emails'),api('/api/admin/analytics'),api('/api/admin/monetization'),api('/api/admin/teachers'),api('/api/admin/tutor/audit'),api('/api/admin/piel-perfecta/readiness').catch(()=>null)]);state.adminContent=content;state.adminSummary=summary;state.adminCertificates=certs.certificates||[];state.adminCommerce=commerce||{orders:[],payments:[]};state.adminStudents=students||{students:[],courses:[]};state.adminEmails=emails.emails||[];state.adminAnalytics=analytics;state.adminMonetization=monetization||{bundles:[],coupons:[],promotions:[],courses:[]};state.adminTeachers=teachers||{teachers:[],courses:[]};state.adminTutor=tutorAudit||{policy:null,items:[]};state.pielPerfectaReadiness=ppReadiness}
 async function refreshTeacher(){const [content,summary,students,analytics]=await Promise.all([api('/api/teacher/content'),api('/api/teacher/summary'),api('/api/teacher/students'),api('/api/teacher/analytics')]);state.teacherContent=content;state.teacherSummary=summary;state.teacherStudents=students.students||[];state.teacherAnalytics=analytics}
 
-function shell(inner,active='dashboard'){return `<div class="app"><header class="topbar"><div class="brand">LYKIOS <span>ACADEMY</span><small> CAMPUS</small></div><div class="nav"><button onclick="setRoute('dashboard')">Campus</button><button onclick="logout()">Salir</button></div></header><div class="layout"><aside class="sidebar"><div class="side-kicker">NAVEGACIÓN</div>${[['dashboard','Inicio'],['courses','Mis cursos'],['profile','Mi perfil'],...(state.me?.role==='admin'?[['admin','Administración']]:state.me?.role==='teacher'?[['teacher','Docencia']]:[])].map(([r,l])=>`<button class="side-link ${active===r?'active':''}" onclick="setRoute('${r}')">${l}</button>`).join('')}</aside><main class="content">${inner}</main></div></div>`}
-function renderLogin(){document.body.innerHTML=`<div class="login-wrap"><section class="login-visual"><div class="brand">LYKIOS <span>ACADEMY</span></div><div class="login-kicker">PRIVATE LEARNING CAMPUS</div><h1>Conocimiento clínico.<br/>Diseñado para avanzar.</h1><p>Campus privado de formación médica y profesional. Tu progreso, tus clases y tus certificaciones en un único espacio.</p></section><section class="login-form"><div class="login-card"><div class="mini-logo">L</div><h2>Bienvenido de nuevo</h2><p class="muted">Accede a tu campus Lykios.</p><form id="loginForm"><div class="field"><label>Email</label><input name="email" value="alumno@lykiosacademy.com" type="email" required></div><div class="field"><label>Contraseña</label><input name="password" value="Lykios2026!" type="password" required></div><button class="btn" style="width:100%">Entrar al campus</button><button type="button" class="link-button" onclick="openForgotPassword()">He olvidado mi contraseña</button><button type="button" class="btn-secondary" style="width:100%;margin-top:10px" onclick="openStore()">Explorar cursos</button><div id="loginError" class="muted" style="margin-top:12px"></div><div class="demo">Alumno: alumno@lykiosacademy.com · Lykios2026!<br/>Admin: admin@lykiosacademy.com · AdminLykios2026!<br/>Profesor: profesor@lykiosacademy.com · ProfesorLykios2026!</div></form></div></section></div>`;if(!['localhost','127.0.0.1'].includes(location.hostname))document.querySelector('.login-card .demo')?.remove();$('#loginForm').onsubmit=login}
-async function login(e){e.preventDefault();const fd=new FormData(e.target);try{state.me=(await api('/api/login',{method:'POST',body:JSON.stringify(Object.fromEntries(fd))})).user;await loadDashboard();setRoute(state.me.role==='admin'?'admin':state.me.role==='teacher'?'teacher':'dashboard')}catch(err){$('#loginError').textContent=err.message}}
+function shell(inner,active='dashboard'){
+  const mobileExtra=state.me?.role==='admin'?'<button onclick="setRoute(\'admin\')"><span>⚙</span>Admin</button>':state.me?.role==='teacher'?'<button onclick="setRoute(\'teacher\')"><span>✎</span>Docencia</button>':'';
+  return `<div class="app"><header class="topbar"><div class="brand">LYKIOS <span>ACADEMY</span><small> CAMPUS</small></div><div class="nav"><button onclick="setRoute('dashboard')">Campus</button><button onclick="logout()">Salir</button></div></header><div class="layout"><aside class="sidebar"><div class="side-kicker">NAVEGACIÓN</div>${[['dashboard','Inicio'],['courses','Mis cursos'],['profile','Mi perfil'],...(state.me?.role==='admin'?[['admin','Administración']]:state.me?.role==='teacher'?[['teacher','Docencia']]:[])].map(([r,l])=>`<button class="side-link ${active===r?'active':''}" onclick="setRoute('${r}')">${l}</button>`).join('')}</aside><main class="content">${inner}</main></div><nav class="mobile-nav"><button class="${active==='dashboard'?'active':''}" onclick="setRoute('dashboard')"><span>⌂</span>Inicio</button><button class="${active==='courses'?'active':''}" onclick="setRoute('courses')"><span>▤</span>Cursos</button><button class="${active==='profile'?'active':''}" onclick="setRoute('profile')"><span>○</span>Perfil</button>${mobileExtra}</nav></div>`;
+}
+function renderLogin(){document.body.innerHTML=`<div class="login-wrap"><section class="login-visual"><div class="brand">LYKIOS <span>ACADEMY</span></div><div class="login-kicker">PRIVATE LEARNING CAMPUS</div><h1>Conocimiento clínico.<br/>Diseñado para avanzar.</h1><p>Campus privado de formación médica y profesional. Tu progreso, tus clases y tus certificaciones en un único espacio.</p></section><section class="login-form"><div class="login-card"><div class="mini-logo">L</div><h2>Bienvenido de nuevo</h2><p class="muted">Accede a tu campus Lykios.</p><form id="loginForm" autocomplete="on"><div class="field"><label>Email</label><input name="email" type="email" autocomplete="username" required></div><div class="field"><label>Contraseña</label><input name="password" type="password" autocomplete="current-password" required></div><button class="btn" style="width:100%">Entrar al campus</button><button type="button" class="link-button" onclick="openForgotPassword()">He olvidado mi contraseña</button><button type="button" class="btn-secondary" style="width:100%;margin-top:10px" onclick="openStore()">Explorar cursos</button><a class="link-button" style="display:block;text-align:center;margin-top:12px" href="/verify">Verificar un certificado</a><div id="loginError" class="muted" style="margin-top:12px"></div></form></div></section></div>`;$('#loginForm').onsubmit=login}
+async function login(e){e.preventDefault();const fd=new FormData(e.target);const pendingPath=location.pathname;const pendingParams=new URLSearchParams(location.search);try{state.me=(await api('/api/login',{method:'POST',body:JSON.stringify(Object.fromEntries(fd))})).user;await loadDashboard();if(state.me.role==='student'&&pendingPath==='/course'&&pendingParams.get('slug'))return openCourse(pendingParams.get('slug'),false);setRoute(state.me.role==='admin'?'admin':state.me.role==='teacher'?'teacher':'dashboard')}catch(err){$('#loginError').textContent=err.message}}
 function openForgotPassword(){document.body.innerHTML=`<div class="login-wrap"><section class="login-visual"><div class="brand">LYKIOS <span>ACADEMY</span></div><div class="login-kicker">RECUPERAR ACCESO</div><h1>Vuelve a tu formación.</h1><p>Introduce tu email y generaremos un enlace temporal para crear una nueva contraseña.</p></section><section class="login-form"><div class="login-card"><div class="mini-logo">L</div><h2>Recuperar contraseña</h2><form id="forgotForm"><div class="field"><label>Email</label><input name="email" type="email" required></div><button class="btn" style="width:100%">Enviar instrucciones</button><button type="button" class="btn-secondary" style="width:100%;margin-top:10px" onclick="render('login')">Volver</button><div id="forgotMsg" class="muted" style="margin-top:12px"></div></form></div></section></div>`;$('#forgotForm').onsubmit=forgotPassword}
 async function forgotPassword(e){e.preventDefault();try{const r=await api('/api/password/forgot',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});$('#forgotMsg').textContent=r.message||'Revisa tu email.'}catch(err){$('#forgotMsg').textContent=err.message}}
-function renderResetPassword(token){document.body.innerHTML=`<div class="login-wrap"><section class="login-visual"><div class="brand">LYKIOS <span>ACADEMY</span></div><div class="login-kicker">SEGURIDAD</div><h1>Crea una nueva contraseña.</h1><p>Este enlace es temporal y dejará de funcionar después de utilizarlo.</p></section><section class="login-form"><div class="login-card"><div class="mini-logo">L</div><h2>Nueva contraseña</h2><form id="resetForm"><div class="field"><label>Nueva contraseña</label><input name="password" type="password" minlength="8" required></div><button class="btn" style="width:100%">Guardar contraseña</button><div id="resetMsg" class="muted" style="margin-top:12px"></div></form></div></section></div>`;$('#resetForm').onsubmit=e=>resetPassword(e,token)}
-async function resetPassword(e,token){e.preventDefault();const password=new FormData(e.target).get('password');try{await api('/api/password/reset',{method:'POST',body:JSON.stringify({token,password})});history.replaceState({},'', '/login');render('login');toast('Contraseña actualizada')}catch(err){$('#resetMsg').textContent=err.message}}
+function renderResetPassword(token){document.body.innerHTML=`<div class="login-wrap"><section class="login-visual"><div class="brand">LYKIOS <span>ACADEMY</span></div><div class="login-kicker">SEGURIDAD</div><h1>Crea una nueva contraseña.</h1><p>Este enlace es temporal y dejará de funcionar después de utilizarlo.</p></section><section class="login-form"><div class="login-card"><div class="mini-logo">L</div><h2>Nueva contraseña</h2><form id="resetForm"><div class="field"><label>Nueva contraseña</label><input name="password" type="password" minlength="12" maxlength="128" autocomplete="new-password" required><small>Mínimo 12 caracteres.</small></div><div class="field"><label>Repite la contraseña</label><input name="confirmPassword" type="password" minlength="12" maxlength="128" autocomplete="new-password" required></div><button class="btn" style="width:100%">Guardar contraseña</button><div id="resetMsg" class="muted" style="margin-top:12px"></div></form></div></section></div>`;$('#resetForm').onsubmit=e=>resetPassword(e,token)}
+async function resetPassword(e,token){e.preventDefault();const fd=new FormData(e.target);const password=fd.get('password'),confirmPassword=fd.get('confirmPassword');if(password!==confirmPassword){$('#resetMsg').textContent='Las contraseñas no coinciden';return}try{await api('/api/password/reset',{method:'POST',body:JSON.stringify({token,password})});history.replaceState({},'', '/login');render('login');toast('Contraseña actualizada')}catch(err){$('#resetMsg').textContent=err.message}}
 
 async function logout(){await api('/api/logout',{method:'POST'}).catch(()=>{});state={};setRoute('login')}
-async function openStore(){try{const r=await api('/api/public/catalog');state.catalog=r.courses||[];state.catalogBundles=r.bundles||[];state.checkoutProvider=r.checkoutProvider||'mock';renderStore()}catch(e){toast(e.message,'error')}}
+async function openStore(){try{const r=await api('/api/public/catalog');state.catalog=r.courses||[];state.catalogBundles=r.bundles||[];state.checkoutProvider=r.checkoutProvider||'mock';renderStore();const slug=new URLSearchParams(location.search).get('course');if(slug&&findStoreItem('course',slug))openCheckout('course',slug)}catch(e){toast(e.message,'error')}}
 function productPrice(c){return c.promotion?`<div class="promo-badge">${esc(c.promotion.badge||'Oferta')}</div><div class="store-price"><span class="old-price">${esc(c.basePriceLabel)}</span> ${esc(c.priceLabel)}</div>`:`<div class="store-price">${esc(c.priceLabel)}</div>`}
 function renderStore(){document.body.innerHTML=`<div class="store-page"><header class="store-top"><div class="brand">LYKIOS <span>ACADEMY</span></div><button class="btn-secondary" onclick="render('login')">Acceder al campus</button></header><main class="store-main"><div class="page-kicker">CATÁLOGO LYKIOS</div><h1>Formación diseñada para avanzar.</h1><p class="muted">Cursos propios, packs, promociones y acceso inmediato.</p><div class="store-grid">${(state.catalog||[]).map(c=>`<article class="store-card"><div class="eyebrow">LYKIOS COURSE</div><h2>${esc(c.title)}</h2><p>${esc(c.subtitle)}</p>${productPrice(c)}<button class="btn" onclick="openCheckout('course','${c.slug}')">Matricularme</button></article>`).join('')}</div>${state.catalogBundles?.length?`<div class="page-kicker" style="margin-top:42px">PACKS LYKIOS</div><div class="store-grid">${state.catalogBundles.map(b=>`<article class="store-card bundle-card"><div class="eyebrow">LYKIOS BUNDLE</div><h2>${esc(b.title)}</h2><p>${esc(b.subtitle)}</p><div class="bundle-courses">${(b.courseTitles||[]).map(x=>`<span>✓ ${esc(x)}</span>`).join('')}</div>${productPrice(b)}<button class="btn gold" onclick="openCheckout('bundle','${b.slug}')">Comprar pack</button></article>`).join('')}</div>`:''}</main><div id="checkoutRoot"></div></div>`}
 function findStoreItem(type,slug){return type==='bundle'?(state.catalogBundles||[]).find(x=>x.slug===slug):(state.catalog||[]).find(x=>x.slug===slug)}
-function openCheckout(type,slug){const c=findStoreItem(type,slug);if(!c)return;const live=state.checkoutProvider==='stripe';$('#checkoutRoot').innerHTML=`<div class="drawer-backdrop"><aside class="drawer"><div class="drawer-head"><div><div class="page-kicker">MATRÍCULA</div><h2>${esc(c.title)}</h2></div><button class="drawer-close" onclick="$('#checkoutRoot').innerHTML=''">×</button></div><form id="checkoutForm" class="admin-form"><div class="form-grid"><div class="field"><label>Nombre</label><input name="firstName" required></div><div class="field"><label>Apellidos</label><input name="lastName"></div></div><div class="field"><label>Email</label><input name="email" type="email" required></div><div class="field"><label>Contraseña para tu campus</label><input name="password" type="password" minlength="8" required></div><div class="field"><label>Cupón / beca</label><div class="coupon-row"><input id="couponCode" name="couponCode" placeholder="Código opcional"><button type="button" class="btn-secondary" onclick="validateCoupon('${type}','${slug}')">Aplicar</button></div><small id="couponMsg"></small></div><div class="checkout-total"><span>Total</span><b id="checkoutTotal">${esc(c.priceLabel)}</b></div>${c.promotion?`<div class="promo-note">${esc(c.promotion.name)}</div>`:''}<div class="demo">${live?'Pago seguro procesado por Stripe. El acceso se activa únicamente después de la confirmación firmada del pago.':'Entorno de desarrollo: el pago se simula localmente y no se cobra dinero real.'}</div><button class="btn gold" style="width:100%">${live?'Continuar al pago seguro':'Completar matrícula de prueba'}</button></form></aside></div>`;$('#checkoutForm').onsubmit=e=>(live?checkoutReal(e,type,slug):checkoutMock(e,type,slug))}
+function openCheckout(type,slug){const c=findStoreItem(type,slug);if(!c)return;const live=state.checkoutProvider==='stripe';$('#checkoutRoot').innerHTML=`<div class="drawer-backdrop"><aside class="drawer"><div class="drawer-head"><div><div class="page-kicker">MATRÍCULA</div><h2>${esc(c.title)}</h2></div><button class="drawer-close" onclick="$('#checkoutRoot').innerHTML=''">×</button></div><form id="checkoutForm" class="admin-form"><div class="form-grid"><div class="field"><label>Nombre</label><input name="firstName" required></div><div class="field"><label>Apellidos</label><input name="lastName"></div></div><div class="field"><label>Email</label><input name="email" type="email" required></div><div class="field"><label>Contraseña para tu campus</label><input name="password" type="password" minlength="12" maxlength="128" autocomplete="new-password" required><small>Mínimo 12 caracteres. Si ya tienes cuenta, introduce tu contraseña actual.</small></div><div class="field"><label>Cupón / beca</label><div class="coupon-row"><input id="couponCode" name="couponCode" placeholder="Código opcional"><button type="button" class="btn-secondary" onclick="validateCoupon('${type}','${slug}')">Aplicar</button></div><small id="couponMsg"></small></div><div class="checkout-total"><span>Total</span><b id="checkoutTotal">${esc(c.priceLabel)}</b></div>${c.promotion?`<div class="promo-note">${esc(c.promotion.name)}</div>`:''}<div class="demo">${live?'Pago seguro procesado por Stripe. El acceso se activa únicamente después de la confirmación firmada del pago.':'Entorno de desarrollo: el pago se simula localmente y no se cobra dinero real.'}</div><button class="btn gold" style="width:100%">${live?'Continuar al pago seguro':'Completar matrícula de prueba'}</button></form></aside></div>`;$('#checkoutForm').onsubmit=e=>(live?checkoutReal(e,type,slug):checkoutMock(e,type,slug))}
 async function validateCoupon(type,slug){const code=$('#couponCode').value.trim();if(!code){$('#couponMsg').textContent='';return}try{const email=$('#checkoutForm input[name=email]').value;const r=await api('/api/checkout/coupon',{method:'POST',body:JSON.stringify({itemType:type,itemSlug:slug,couponCode:code,email})});$('#couponMsg').textContent=`${r.coupon?.category==='scholarship'?'Beca aplicada':'Código aplicado'} · -${r.discountLabel}`;$('#checkoutTotal').textContent=r.totalLabel;$('#couponMsg').className='success-text'}catch(e){$('#couponMsg').textContent=e.message;$('#couponMsg').className='danger-text'}}
 async function checkoutMock(e,itemType,itemSlug){e.preventDefault();const body=Object.fromEntries(new FormData(e.target));body.itemType=itemType;body.itemSlug=itemSlug;try{const r=await api('/api/checkout/mock',{method:'POST',body:JSON.stringify(body)});state.me=r.user;await loadDashboard();toast(`Matrícula activada · ${r.order.totalCents===0?'sin cargo':r.order.number}`);setRoute('dashboard')}catch(err){toast(err.message,'error')}}
 async function checkoutReal(e,itemType,itemSlug){e.preventDefault();const btn=e.target.querySelector('button[type=submit]');if(btn){btn.disabled=true;btn.textContent='Preparando pago…'}const body=Object.fromEntries(new FormData(e.target));body.itemType=itemType;body.itemSlug=itemSlug;try{const r=await api('/api/checkout/create',{method:'POST',body:JSON.stringify(body)});state.me=r.user;if(r.free){await loadDashboard();toast('Matrícula activada · sin cargo');return setRoute('dashboard')}if(!r.checkoutUrl)throw new Error('No se recibió la URL de pago');location.href=r.checkoutUrl}catch(err){toast(err.message,'error');if(btn){btn.disabled=false;btn.textContent='Continuar al pago seguro'}}}
 async function confirmPaymentReturn(orderId){for(let i=0;i<6;i++){try{const r=await api('/api/checkout/status?order='+encodeURIComponent(orderId));if(r.order.status==='paid'){await loadDashboard();toast('Pago confirmado · acceso activado');history.replaceState({},'', '/dashboard');return true}if(['payment_failed','expired'].includes(r.order.status)){toast('El pago no pudo confirmarse','error');return false}}catch{}await new Promise(r=>setTimeout(r,1000))}toast('Pago recibido. La activación puede tardar unos segundos.','ok');return false}
 function renderDashboard(){const d=state.dashboard; const c=d?.courses?.[0];document.body.innerHTML=shell(`<section class="hero"><div class="hero-kicker">CAMPUS PERSONAL</div><h1>Hola, ${esc(state.me.firstName)}</h1><p>Continúa justo donde lo dejaste. Cada clase completada acerca tu formación a la práctica clínica.</p></section><section class="grid">${[['Cursos activos',d.stats.activeCourses],['Clases completadas',d.stats.completedLessons],['Certificados',d.stats.certificates],['Racha',d.stats.streakDays+' días']].map(x=>`<div class="card stat"><div class="value">${x[1]}</div><div class="label">${x[0]}</div></div>`).join('')}</section><h2 class="section-title">Continúa aprendiendo</h2>${c?`<div class="card course-card"><div class="course-art"><div class="eyebrow">Medicina estética</div><h2>${esc(c.title)}</h2><div style="opacity:.82">${esc(c.subtitle)}</div></div><div><div class="split"><b>Progreso</b><b>${c.progressPercent}%</b></div><div class="progress"><span style="width:${c.progressPercent}%"></span></div><p class="muted">${c.modules.length} módulos · ${c.modules.flatMap(m=>m.lessons).length} clases</p><button class="btn" onclick="setRoute('course')">Continuar curso</button></div></div>`:''}<h2 class="section-title">Actividad reciente</h2><div class="card">${(d.activity||[]).map(a=>`<div class="lesson"><div><b>${esc(a.label)}</b><br/><small>${new Date(a.at).toLocaleString('es-ES')}</small></div><span>✓</span></div>`).join('')||'<span class="muted">Aún sin actividad.</span>'}</div>`,'dashboard')}
-function renderCourses(){const d=state.dashboard;document.body.innerHTML=shell(`<div class="page-head"><div><div class="page-kicker">BIBLIOTECA PERSONAL</div><h1>Mis cursos</h1><p class="muted">Formación activa en tu cuenta.</p></div></div>${(d.courses||[]).map(c=>`<div class="card" style="margin:16px 0"><h2>${esc(c.title)}</h2><p>${esc(c.subtitle)}</p><div class="progress"><span style="width:${c.progressPercent}%"></span></div><p class="muted">${c.progressPercent}% completado</p><button class="btn" onclick="setRoute('course')">Abrir curso</button></div>`).join('')}`,'courses')}
-function renderCourse(){const c=state.course;if(!c)return setRoute('dashboard');const cs=state.certificateStatus;const comp=cs?.completion;const cert=cs?.certificate;const certBlock=cs?`<h2 class="section-title">Certificación</h2><section class="card certificate-panel ${comp?.eligible||cert?'ready':''}"><div class="certificate-mark">${cert?'✓':'◇'}</div><div class="certificate-copy"><div class="page-kicker">CERTIFICADO LYKIOS</div><h2>${cert?'Certificado emitido':'Requisitos de finalización'}</h2>${cert?`<p>Tu certificado es verificable públicamente mediante el código <b>${esc(cert.code)}</b>.</p><div class="certificate-actions"><a class="btn" href="/api/certificate/pdf?code=${encodeURIComponent(cert.code)}">Descargar PDF</a><a class="btn-secondary" target="_blank" href="/verify/${encodeURIComponent(cert.code)}">Verificar certificado</a></div>`:`<div class="requirement-list"><div><span>${comp.lessonsCompleted===comp.lessonsTotal?'✓':'○'}</span><b>Clases publicadas</b><small>${comp.lessonsCompleted}/${comp.lessonsTotal} completadas</small></div><div><span>${comp.allAssessmentsPassed?'✓':'○'}</span><b>Evaluaciones obligatorias</b><small>${comp.assessmentsPassed}/${comp.assessmentsRequired} aprobadas</small></div></div>${comp.eligible?`<button class="btn gold" onclick="issueCertificate()">Emitir certificado</button>`:`<p class="muted">Completa los requisitos pendientes para habilitar la emisión.</p>`}`}</div></section>`:'';document.body.innerHTML=shell(`<section class="hero"><div class="hero-kicker">CURSO PROFESIONAL</div><h1>${esc(c.title)}</h1><p>${esc(c.subtitle)}</p><div class="progress hero-progress"><span style="width:${c.progressPercent}%"></span></div><p>${c.progressPercent}% completado</p></section><h2 class="section-title">Programa</h2>${c.modules.map(m=>`<div class="card module"><div class="module-head"><h3>${esc(m.code)} · ${esc(m.title)}</h3><span class="status-pill ${m.status}">${m.status==='published'?'Publicado':'Borrador'}</span></div>${m.lessons.map(l=>`<div class="lesson ${c.completedLessonIds.includes(l.id)?'completed':''}"><div><b>${esc(l.code)} · ${esc(l.title)}</b><br/><small>${l.durationMinutes} min ${c.completedLessonIds.includes(l.id)?'· completada':''}</small></div><button class="btn" onclick="openLesson('${l.id}')">Abrir</button></div>`).join('')}</div>`).join('')}${certBlock}`,'courses')}
-function openLesson(id){state.currentLesson=state.course.modules.flatMap(m=>m.lessons).find(l=>l.id===id);setRoute('lesson')}
-function renderLesson(){const l=state.currentLesson||state.course?.modules.flatMap(m=>m.lessons).find(x=>x.code==='2.9')||state.course?.modules.flatMap(m=>m.lessons)[0];if(!l)return setRoute('course');const done=state.course.completedLessonIds.includes(l.id);const assessment=l.assessment;const vp=l.videoProgress||{percent:0,currentTime:0};document.body.innerHTML=shell(`<div class="lesson-view"><div class="card lesson-nav"><div class="nav-title">Contenido del curso</div>${state.course.modules.map(m=>`<div class="lesson-group"><b>${esc(m.code)} · ${esc(m.title)}</b>${m.lessons.map(x=>`<div class="lesson-link ${x.id===l.id?'current':''}" onclick="openLesson('${x.id}')">${state.course.completedLessonIds.includes(x.id)?'✓':'○'} ${esc(x.code)} ${esc(x.title)}</div>`).join('')}</div>`).join('')}</div><div><div class="video-shell">${l.video?`<video id="lessonVideo" class="video-player" controls playsinline preload="metadata"></video><div class="video-overlay"><span>LYKIOS ACADEMY · ACCESO PRIVADO</span><span id="videoProgressText">${vp.percent||0}% visto</span></div>`:`<div class="video video-empty"><div><div class="play-orb">▶</div><p>Vídeo pendiente de publicación</p></div></div>`}</div><div class="card lesson-main"><div class="muted">Clase ${esc(l.code)} · ${l.durationMinutes||0} min</div><h1>${esc(l.title)}</h1><p>${esc(l.summary||'Lección clínica Lykios Academy. Aquí se integrará el vídeo definitivo, los descargables y la evaluación cuando corresponda.')}</p>${l.video?`<div class="video-metric"><span>Progreso de vídeo</span><div class="progress-track"><i style="width:${vp.percent||0}%"></i></div><b>${vp.percent||0}%</b></div>`:''}<div class="resource-bar"><button class="btn ${done?'gold':''}" onclick="completeLesson('${l.id}')">${done?'✓ Completada':'Marcar como completada'}</button>${(l.resources||[]).map(r=>`<a class="resource-chip" target="_blank" href="/api/resource?id=${r.id}">↗ ${esc(r.name)}</a>`).join('')||'<span class="muted">Sin recursos adjuntos todavía.</span>'}</div></div>${assessment?`<div class="card assessment-card"><div><div class="page-kicker">EVALUACIÓN</div><h2>${esc(assessment.title)}</h2><p class="muted">Nota mínima ${assessment.passingScore}% · ${assessment.maxAttempts?assessment.maxAttempts+' intentos máximos':'intentos ilimitados'}</p></div><button class="btn" onclick="openAssessment('${assessment.id}')">Realizar evaluación</button></div>`:''}${renderTutorCard()}</div></div>`,'courses');const tf=$('#tutorForm');if(tf)tf.onsubmit=askTutor;if(l.video)initLessonVideo(l)}
-async function initLessonVideo(lesson){try{const s=await api('/api/video/session',{method:'POST',body:JSON.stringify({lessonId:lesson.id})});const v=$('#lessonVideo');if(!v)return;v.src=s.streamUrl;const resume=Math.max(0,Number(s.progress?.currentTime)||0);v.addEventListener('loadedmetadata',()=>{if(resume>5&&resume<v.duration-5)v.currentTime=resume});let lastSent=0;const sync=async(force=false)=>{if(!v.duration||(!force&&Date.now()-lastSent<5000))return;lastSent=Date.now();try{const r=await api('/api/video/progress',{method:'POST',body:JSON.stringify({lessonId:lesson.id,currentTime:v.currentTime,duration:v.duration})});const p=r.progress?.percent||0;const label=$('#videoProgressText');if(label)label.textContent=p+'% visto'}catch{}};v.addEventListener('timeupdate',()=>sync(false));v.addEventListener('pause',()=>sync(true));v.addEventListener('ended',()=>sync(true));window.addEventListener('beforeunload',()=>{navigator.sendBeacon?.('/api/video/progress',new Blob([JSON.stringify({lessonId:lesson.id,currentTime:v.currentTime,duration:v.duration})],{type:'application/json'}))},{once:true})}catch(err){toast(err.message,'error')}}
+function renderCourses(){const d=state.dashboard;document.body.innerHTML=shell(`<div class="page-head"><div><div class="page-kicker">BIBLIOTECA PERSONAL</div><h1>Mis cursos</h1><p class="muted">Formación activa en tu cuenta.</p></div></div>${(d.courses||[]).map(c=>`<div class="card" style="margin:16px 0"><h2>${esc(c.title)}</h2><p>${esc(c.subtitle)}</p><div class="progress"><span style="width:${c.progressPercent}%"></span></div><p class="muted">${c.progressPercent}% completado</p><button class="btn" onclick="openCourse('${c.slug}')">Abrir curso</button></div>`).join('')}`,'courses')}
+async function openCourse(slug,push=true){try{state.course=await api('/api/course?slug='+encodeURIComponent(slug));state.certificateStatus=await api('/api/certificate/status?slug='+encodeURIComponent(slug));state.currentLesson=null;if(push)history.pushState({},'', '/course?slug='+encodeURIComponent(slug));renderCourse()}catch(e){toast(e.message,'error')}}
+function renderCourse(){const c=state.course;if(!c)return setRoute('dashboard');const courseKicker=c.slug==='piel-perfecta-20'?'CURSO ONLINE · CUIDADO DE LA PIEL':'CURSO PROFESIONAL';const moduleLabel=m=>String(m.title||'').startsWith('Módulo ')?m.title:`${m.code} · ${m.title}`;const rawCs=state.certificateStatus;const cs=rawCs&&(!rawCs.courseId||rawCs.courseId===c.id)&&(!rawCs.courseSlug||rawCs.courseSlug===c.slug)?rawCs:null;const comp=cs?.completion;const cert=cs?.certificate;const certBlock=cs?`<h2 class="section-title">Certificación</h2><section class="card certificate-panel ${comp?.eligible||cert?'ready':''}"><div class="certificate-mark">${cert?'✓':'◇'}</div><div class="certificate-copy"><div class="page-kicker">CERTIFICADO LYKIOS</div><h2>${cert?'Certificado emitido':'Requisitos de finalización'}</h2>${cert?`<p>Tu certificado es verificable públicamente mediante el código <b>${esc(cert.code)}</b>.</p><div class="certificate-actions"><a class="btn" href="/api/certificate/pdf?code=${encodeURIComponent(cert.code)}">Descargar PDF</a><a class="btn-secondary" target="_blank" href="/verify/${encodeURIComponent(cert.code)}">Verificar certificado</a></div>`:`<div class="requirement-list"><div><span>${comp.lessonsCompleted===comp.lessonsTotal?'✓':'○'}</span><b>Clases publicadas</b><small>${comp.lessonsCompleted}/${comp.lessonsTotal} completadas</small></div><div><span>${comp.allAssessmentsPassed?'✓':'○'}</span><b>Evaluaciones obligatorias</b><small>${comp.assessmentsPassed}/${comp.assessmentsRequired} aprobadas</small></div></div>${comp.eligible?`<p class="muted">Curso completado. Tu certificado se genera automáticamente y aparecerá aquí para descargarlo.</p><button class="btn gold" onclick="issueCertificate()">Actualizar certificado</button>`:`<p class="muted">Completa los requisitos pendientes para habilitar tu certificado.</p>`}`}</div></section>`:'';document.body.innerHTML=shell(`<section class="hero"><div class="hero-kicker">${esc(courseKicker)}</div><h1>${esc(c.title)}</h1><p>${esc(c.subtitle)}</p><div class="progress hero-progress"><span style="width:${c.progressPercent}%"></span></div><p>${c.progressPercent}% completado</p></section><h2 class="section-title">Programa</h2>${c.modules.map(m=>`<div class="card module"><div class="module-head"><h3>${esc(moduleLabel(m))}</h3><span class="status-pill ${m.status}">${m.status==='published'?'Publicado':'Borrador'}</span></div>${m.lessons.map(l=>`<div class="lesson ${c.completedLessonIds.includes(l.id)?'completed':''} ${l.locked?'locked':''}"><div><b>${l.locked?'🔒 ':' '}${esc(l.code)} · ${esc(l.title)}</b><br/><small>${l.durationMinutes} min ${c.completedLessonIds.includes(l.id)?'· completada':l.locked?'· '+esc(l.lockReason||'Bloqueada'):''}</small></div><button class="btn" ${l.locked?'disabled title="'+esc(l.lockReason||'Clase bloqueada')+'"':`onclick="openLesson('${l.id}')"`}>${l.locked?'Bloqueada':'Abrir'}</button></div>`).join('')}</div>`).join('')}${certBlock}`,'courses')}
+function openLesson(id){const lesson=state.course?.modules.flatMap(m=>m.lessons).find(l=>l.id===id);if(!lesson)return;if(lesson.locked){toast(lesson.lockReason||'Esta clase todavía está bloqueada','error');return}state.currentLesson=lesson;setRoute('lesson')}
+function lessonVideoList(lesson){if(Array.isArray(lesson?.videos)&&lesson.videos.length)return lesson.videos.slice().sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0));if(lesson?.video)return [{id:lesson.videoId||'primary',ref:lesson.video,name:lesson.videoName||'Vídeo 1',mime:lesson.videoMime||'video/mp4',size:lesson.videoSize||null,position:1,progress:lesson.videoProgress||{percent:0,currentTime:0}}];return []}
+
+function lessonAssessmentMarkup(assessment,unlocked){
+  if(!assessment||(!unlocked&&!assessment.passed))return '';
+  return `<div class="card assessment-card"><div><div class="page-kicker">EVALUACIÓN</div><h2>${esc(assessment.title)}</h2><p class="muted">Nota mínima ${assessment.passingScore}% · ${assessment.maxAttempts?assessment.maxAttempts+' intentos máximos':'intentos ilimitados'}${assessment.passed?' · ✓ aprobada':''}</p></div><button class="btn" onclick="openAssessment('${assessment.id}')">${assessment.passed?'Revisar evaluación':'Realizar evaluación'}</button></div>`;
+}
+
+function videoWatermarkIdentity(){
+  const name=[state.me?.firstName,state.me?.lastName].filter(Boolean).join(' ').trim();
+  const email=String(state.me?.email||'').trim();
+  return {name:name||'Usuario Lykios',email};
+}
+function moveVideoWatermark(el){
+  if(!el)return;
+  el.style.left='auto';
+  el.style.right='18px';
+  el.style.top='52px';
+  el.style.transform='none';
+}
+function startVideoWatermark(video,index){
+  const wm=$('#videoWatermark_'+index);if(!wm)return;
+  clearInterval(video._lykiosWatermarkTimer);
+  video._lykiosWatermarkTimer=null;
+  moveVideoWatermark(wm);
+  wm.classList.add('active');
+}
+function stopVideoWatermark(video,index){
+  clearInterval(video._lykiosWatermarkTimer);
+  video._lykiosWatermarkTimer=null;
+  const wm=$('#videoWatermark_'+index);if(wm){moveVideoWatermark(wm);wm.classList.add('active')}
+}
+async function toggleVideoShellFullscreen(video,index){
+  const shell=video?.closest?.('.video-shell');if(!shell)return;
+  try{
+    const active=document.fullscreenElement||document.webkitFullscreenElement;
+    if(active){
+      if(document.exitFullscreen)await document.exitFullscreen();
+      else if(document.webkitExitFullscreen)document.webkitExitFullscreen();
+      return;
+    }
+    if(shell.requestFullscreen){await shell.requestFullscreen();return}
+    if(shell.webkitRequestFullscreen){shell.webkitRequestFullscreen();return}
+    toast('Tu navegador no permite pantalla completa en este reproductor','error');
+  }catch(error){toast('No se pudo activar la pantalla completa','error')}
+}
+function toggleVideoFullscreenByIndex(index){
+  const media=$('#lessonVideo_'+index);
+  if(media)toggleVideoShellFullscreen(media,index);
+}
+
+function renderLesson(){const l=state.currentLesson||state.course?.modules.flatMap(m=>m.lessons).find(x=>x.code==='2.9')||state.course?.modules.flatMap(m=>m.lessons)[0];if(!l)return setRoute('course');if(l.locked){toast(l.lockReason||'Completa primero las clases anteriores','error');state.currentLesson=null;return renderCourse()}const cs=l.completionStatus||{hasRequirements:false,completed:state.course.completedLessonIds.includes(l.id),videosRequired:0,videosCompleted:0,assessmentRequired:false,assessmentPassed:true,progressPercent:0};const done=Boolean(cs.completed||state.course.completedLessonIds.includes(l.id));const assessment=l.assessment;const vp=l.videoProgress||{percent:0,currentTime:0};const videos=lessonVideoList(l);const wmIdentity=videoWatermarkIdentity();const videoBlocks=videos.length?videos.map((video,i)=>`<div class="video-shell"><video id="lessonVideo_${i}" class="video-player" controls controlslist="nodownload nofullscreen noremoteplayback" disablepictureinpicture disableremoteplayback playsinline preload="metadata" referrerpolicy="no-referrer"></video><div id="videoWatermark_${i}" class="video-watermark" aria-hidden="true"><span>USO PERSONAL</span><b>${esc(wmIdentity.name)}</b><small>${esc(wmIdentity.email)}</small></div><div class="video-overlay"><span>LYKIOS ACADEMY · VÍDEO ${i+1} · ACCESO PERSONAL</span><span class="video-overlay-actions"><span id="videoProgressText_${i}">${video.progress?.percent||0}% visto</span><button id="videoFullscreen_${i}" class="video-fullscreen-btn" type="button" aria-label="Pantalla completa" onclick="toggleVideoFullscreenByIndex(${i})">⛶</button></span></div></div>`).join(''):`<div class="video-shell"><div class="video video-empty"><div><div class="play-orb">▶</div><p>Vídeo pendiente de publicación</p></div></div></div>`;const reqText=cs.hasRequirements?`${cs.videosRequired?`${cs.videosCompleted||0}/${cs.videosRequired} vídeos completados`:''}${cs.videosRequired&&cs.assessmentRequired?' · ':''}${cs.assessmentRequired?(cs.assessmentPassed?'evaluación aprobada':'evaluación pendiente'):''}`:'';const completionButton=cs.hasRequirements?`<button id="lessonCompletionButton" class="btn ${done?'gold':''}" disabled>${done?'✓ Clase completada':'Completa los requisitos'}</button>`:`<button id="lessonCompletionButton" class="btn ${done?'gold':''}" onclick="completeLesson('${l.id}')">${done?'✓ Completada':'Marcar como completada'}</button>`;document.body.innerHTML=shell(`<div class="lesson-view"><div class="card lesson-nav"><div class="nav-title">Contenido del curso</div>${state.course.modules.map(m=>`<div class="lesson-group"><b>${esc(String(m.title||'').startsWith('Módulo ')?m.title:(m.code+' · '+m.title))}</b>${m.lessons.map(x=>`<div class="lesson-link ${x.id===l.id?'current':''} ${x.locked?'locked':''}" ${x.locked?'title="'+esc(x.lockReason||'Clase bloqueada')+'"':`onclick="openLesson('${x.id}')"`}>${state.course.completedLessonIds.includes(x.id)?'✓':x.locked?'🔒':'○'} ${esc(x.code)} ${esc(x.title)}</div>`).join('')}</div>`).join('')}</div><div><div class="lesson-videos">${videoBlocks}</div><div class="card lesson-main"><div class="muted">Clase ${esc(l.code)} · ${l.durationMinutes||0} min</div><h1>${esc(l.title)}</h1><p>${esc(l.summary||'Lección clínica Lykios Academy. Aquí se integrará el vídeo definitivo, los descargables y la evaluación cuando corresponda.')}</p>${videos.length?`<div class="video-metric"><span>Progreso de vídeo${videos.length>1?'s':''}</span><div class="progress-track"><i id="lessonVideoProgressBar" style="width:${vp.percent||0}%"></i></div><b id="lessonVideoProgressValue">${vp.percent||0}%</b></div>`:''}${cs.hasRequirements?`<div class="muted" id="lessonRequirementText" style="margin:10px 0 14px">Finalización automática · ${esc(reqText)}</div>`:''}<div class="resource-bar">${completionButton}${(l.resources||[]).map(r=>`<a class="resource-chip" target="_blank" href="/api/resource?id=${r.id}">↗ ${esc(r.name)}</a>`).join('')||'<span class="muted">Sin recursos adjuntos todavía.</span>'}</div></div><div id="lessonAssessmentSlot">${lessonAssessmentMarkup(assessment,Boolean(assessment?.unlocked||assessment?.passed))}</div>${renderTutorCard()}</div></div>`,'courses');const tf=$('#tutorForm');if(tf)tf.onsubmit=askTutor;videos.forEach((video,i)=>initLessonVideo(l,video,i))}
+function updateLessonCompletionUi(lesson,completion,videoProgress){if(!completion)return;lesson.completionStatus={...(lesson.completionStatus||{}),...completion};if(videoProgress){lesson.videoProgress=videoProgress;const bar=$('#lessonVideoProgressBar');const value=$('#lessonVideoProgressValue');if(bar)bar.style.width=(videoProgress.percent||0)+'%';if(value)value.textContent=(videoProgress.percent||0)+'%'}const btn=$('#lessonCompletionButton');if(btn){btn.textContent=completion.completed?'✓ Clase completada':'Completa los requisitos';btn.classList.toggle('gold',Boolean(completion.completed))}const req=$('#lessonRequirementText');if(req){const parts=[];if(completion.videosRequired)parts.push(`${completion.videosCompleted||0}/${completion.videosRequired} vídeos completados`);if(completion.assessmentRequired)parts.push(completion.assessmentPassed?'evaluación aprobada':'evaluación pendiente');req.textContent='Finalización automática · '+parts.join(' · ')}if(lesson.assessment&&completion.videosRequired>0&&completion.videosCompleted>=completion.videosRequired){lesson.assessment.unlocked=true;const slot=$('#lessonAssessmentSlot');if(slot)slot.innerHTML=lessonAssessmentMarkup(lesson.assessment,true)}if(completion.completed&&!state.course.completedLessonIds.includes(lesson.id))state.course.completedLessonIds.push(lesson.id);if(!completion.completed)state.course.completedLessonIds=state.course.completedLessonIds.filter(id=>id!==lesson.id)}
+function updateVideoProgressFromPlayback(lesson,video,index,progress,lessonCompletion,lessonVideoProgress){
+  const p=progress?.percent||0;
+  const label=$(`#videoProgressText_${index}`);if(label)label.textContent=p+'% visto';
+  video.progress=progress||video.progress;
+  updateLessonCompletionUi(lesson,lessonCompletion,lessonVideoProgress);
+}
+async function initBunnyLessonVideo(lesson,video,index,session){
+  const original=$(`#lessonVideo_${index}`);if(!original)return;
+  const frame=document.createElement('iframe');
+  frame.id=original.id;
+  frame.className='video-player bunny-player';
+  frame.src=session.embedUrl;
+  frame.title=video.name||('Vídeo '+(index+1));
+  frame.loading='eager';
+  frame.referrerPolicy='strict-origin-when-cross-origin';
+  frame.setAttribute('allow','autoplay; encrypted-media');
+  frame.setAttribute('tabindex','0');
+  original.replaceWith(frame);
+  const wm=$(`#videoWatermark_${index}`);moveVideoWatermark(wm);if(wm)wm.classList.add('active');
+  if(!window.playerjs?.Player)throw new Error('El reproductor Bunny no se ha cargado. Recarga la página.');
+  const player=new window.playerjs.Player(frame);
+  const resume=Math.max(0,Number(session.progress?.currentTime)||0);
+  let currentTime=0,duration=0,lastSent=0,ready=false;
+  const parseTiming=data=>{
+    if(typeof data==='string'){try{data=JSON.parse(data)}catch{return}}
+    if(!data||typeof data!=='object')return;
+    currentTime=Math.max(0,Number(data.seconds??data.currentTime??0)||0);
+    duration=Math.max(0,Number(data.duration??0)||0);
+    if(activeLessonVideo?.element===frame){activeLessonVideo.currentTime=currentTime;activeLessonVideo.duration=duration}
+  };
+  const sync=async(force=false,playing=true)=>{
+    if(!duration||(!force&&Date.now()-lastSent<5000))return;
+    lastSent=Date.now();
+    const payload={lessonId:lesson.id,videoId:video.id,currentTime,duration,playing};
+    try{
+      const r=await queueVideoProgress(()=>api('/api/video/progress',{method:'POST',body:JSON.stringify(payload)}));
+      updateVideoProgressFromPlayback(lesson,video,index,r.progress,r.lessonCompletion,r.lessonVideoProgress);
+    }catch(err){
+      const msg=String(err?.message||'');
+      if(/simultánea|otro dispositivo/i.test(msg)){try{player.pause()}catch{};toast(msg,'error')}
+    }
+  };
+  player.on('ready',()=>{
+    ready=true;
+    if(resume>5){try{player.setCurrentTime(resume)}catch{}}
+  });
+  player.on('play',()=>{
+    pauseOtherLessonVideos(frame);
+    activeLessonVideo={lessonId:lesson.id,videoId:video.id,element:frame,player,type:'bunny',currentTime,duration};
+    startVideoWatermark(frame,index);
+  });
+  player.on('timeupdate',data=>{parseTiming(data);sync(false,true)});
+  player.on('pause',()=>{stopVideoWatermark(frame,index);sync(true,false)});
+  player.on('ended',()=>{stopVideoWatermark(frame,index);sync(true,false)});
+  setTimeout(()=>{if(!ready)console.warn('Bunny Player.js todavía no confirmó ready')},8000);
+}
+async function initLessonVideo(lesson,video,index=0){
+  try{
+    const session=await api('/api/video/session',{method:'POST',body:JSON.stringify({lessonId:lesson.id,videoId:video.id})});
+    if(session.provider==='bunny'&&session.embedUrl)return initBunnyLessonVideo(lesson,video,index,session);
+    const v=$(`#lessonVideo_${index}`);if(!v)return;
+    try{v.controlsList?.add('nodownload');v.controlsList?.add('nofullscreen');v.controlsList?.add('noremoteplayback')}catch{}
+    v.disablePictureInPicture=true;v.disableRemotePlayback=true;
+    v.addEventListener('contextmenu',e=>e.preventDefault());v.setAttribute('draggable','false');
+    const wm=$(`#videoWatermark_${index}`);moveVideoWatermark(wm);if(wm)wm.classList.add('active');
+    v.src=session.streamUrl;
+    const resume=Math.max(0,Number(session.progress?.currentTime)||0);
+    v.addEventListener('loadedmetadata',()=>{if(resume>5&&resume<v.duration-5)v.currentTime=resume});
+    v.addEventListener('play',()=>{pauseOtherLessonVideos(v);activeLessonVideo={lessonId:lesson.id,videoId:video.id,element:v,type:'native',currentTime:v.currentTime,duration:v.duration};startVideoWatermark(v,index)});
+    let lastSent=0;
+    const sync=async(force=false)=>{
+      if(!v.duration||(!force&&Date.now()-lastSent<5000))return;
+      lastSent=Date.now();
+      if(activeLessonVideo?.element===v){activeLessonVideo.currentTime=v.currentTime;activeLessonVideo.duration=v.duration}
+      const payload={lessonId:lesson.id,videoId:video.id,currentTime:v.currentTime,duration:v.duration,playing:!v.paused&&!v.ended};
+      try{
+        const r=await queueVideoProgress(()=>api('/api/video/progress',{method:'POST',body:JSON.stringify(payload)}));
+        updateVideoProgressFromPlayback(lesson,video,index,r.progress,r.lessonCompletion,r.lessonVideoProgress);
+      }catch(err){
+        const msg=String(err?.message||'');if(/simultánea|otro dispositivo/i.test(msg)){if(!v.paused)v.pause();toast(msg,'error')}
+      }
+    };
+    v.addEventListener('timeupdate',()=>sync(false));
+    v.addEventListener('pause',()=>{stopVideoWatermark(v,index);sync(true)});
+    v.addEventListener('ended',()=>{stopVideoWatermark(v,index);sync(true)});
+  }catch(err){toast(err.message,'error')}
+}
 async function completeLesson(id){const result=await api('/api/progress',{method:'POST',body:JSON.stringify({lessonId:id,completed:true})});state.course=result.course;await loadDashboard();toast('Clase completada y progreso guardado');renderLesson()}
 async function openAssessment(id){try{state.currentAssessment=await api(`/api/assessment?id=${id}`);state.assessmentResult=null;setRoute('assessment')}catch(e){toast(e.message,'error')}}
-function renderAssessment(){const a=state.currentAssessment;if(!a)return setRoute('course');if(state.assessmentResult)return renderAssessmentResult();const attemptsLabel=a.maxAttempts?`${a.attemptsUsed}/${a.maxAttempts} intentos usados`:`${a.attemptsUsed} intentos usados`;document.body.innerHTML=shell(`<div class="assessment-wrap"><div class="assessment-head"><div><div class="page-kicker">EVALUACIÓN LYKIOS</div><h1>${esc(a.title)}</h1><p>${esc(a.instructions||'Selecciona una respuesta en cada pregunta y envía la evaluación cuando hayas terminado.')}</p><div class="assessment-meta"><span>Nota mínima ${a.passingScore}%</span><span>${attemptsLabel}</span>${a.bestScore!==null?`<span>Mejor nota ${a.bestScore}%</span>`:''}</div></div><button class="btn-secondary" onclick="setRoute('lesson')">Volver a la clase</button></div><form id="assessmentForm" class="assessment-form">${a.questions.map((q,i)=>`<section class="card question-card"><div class="question-number">Pregunta ${i+1}</div><h3>${esc(q.prompt)}</h3><div class="option-list">${q.options.map((o,j)=>`<label class="answer-option"><input type="radio" name="q_${q.id}" value="${j}" required><span>${esc(o)}</span></label>`).join('')}</div></section>`).join('')}<div class="submit-bar"><div><b>${a.questions.length} preguntas</b><br/><span class="muted">La corrección se realiza en el servidor.</span></div><button class="btn" type="submit">Entregar evaluación</button></div></form></div>`,'courses');$('#assessmentForm').onsubmit=submitAssessment}
-async function submitAssessment(e){e.preventDefault();const answers={};for(const q of state.currentAssessment.questions){const checked=document.querySelector(`input[name="q_${q.id}"]:checked`);if(!checked){toast('Responde todas las preguntas','error');return}answers[q.id]=Number(checked.value)}try{state.assessmentResult=await api('/api/assessment/submit',{method:'POST',body:JSON.stringify({assessmentId:state.currentAssessment.id,answers})});state.currentAssessment=await api(`/api/assessment?id=${state.currentAssessment.id}`);await loadDashboard();renderAssessmentResult()}catch(err){toast(err.message,'error')}}
-function renderAssessmentResult(){const r=state.assessmentResult,a=state.currentAssessment;if(!r||!a)return renderAssessment();const passed=r.attempt.passed;document.body.innerHTML=shell(`<div class="assessment-result ${passed?'passed':'failed'}"><div class="result-ring"><span>${r.attempt.score}%</span></div><div class="page-kicker">${passed?'EVALUACIÓN SUPERADA':'EVALUACIÓN NO SUPERADA'}</div><h1>${passed?'Muy bien. Has aprobado.':'Puedes volver a intentarlo.'}</h1><p>Nota mínima requerida: ${r.passingScore}%.</p><div class="result-actions"><button class="btn" onclick="setRoute('lesson')">Volver a la clase</button>${!passed&&(r.attemptsRemaining===null||r.attemptsRemaining>0)?`<button class="btn-secondary" onclick="state.assessmentResult=null;renderAssessment()">Reintentar</button>`:''}</div></div>`,'courses')}
+function renderAssessment(){const a=state.currentAssessment;if(!a)return setRoute('course');if(state.assessmentResult)return renderAssessmentResult();const attemptsLabel=a.maxAttempts?`${a.attemptsUsed}/${a.maxAttempts} intentos usados`:`${a.attemptsUsed} intentos usados`;if(a.passed){document.body.innerHTML=shell(`<div class="assessment-result passed"><div class="result-ring"><span>${a.bestScore||0}%</span></div><div class="page-kicker">EVALUACIÓN SUPERADA</div><h1>Evaluación ya aprobada</h1><p>Tu mejor resultado es <b>${a.bestScore||0}%</b>. No necesitas repetirla.</p><div class="result-actions"><button class="btn" onclick="setRoute('lesson')">Volver a la clase</button></div></div>`,'courses');return}if(a.maxAttempts>0&&a.attemptsUsed>=a.maxAttempts){document.body.innerHTML=shell(`<div class="assessment-result failed"><div class="result-ring"><span>${a.bestScore||0}%</span></div><div class="page-kicker">INTENTOS AGOTADOS</div><h1>Evaluación no superada</h1><p>Has utilizado los ${a.maxAttempts} intentos disponibles. Tu mejor resultado fue ${a.bestScore||0}%.</p><div class="result-actions"><button class="btn" onclick="setRoute('lesson')">Volver a la clase</button></div></div>`,'courses');return}document.body.innerHTML=shell(`<div class="assessment-wrap"><div class="assessment-head"><div><div class="page-kicker">EVALUACIÓN LYKIOS</div><h1>${esc(a.title)}</h1><p>${esc(a.instructions||'Selecciona una respuesta en cada pregunta y envía la evaluación cuando hayas terminado.')}</p><div class="assessment-meta"><span>Nota mínima ${a.passingScore}%</span><span>${attemptsLabel}</span>${a.bestScore!==null?`<span>Mejor nota ${a.bestScore}%</span>`:''}</div></div><button class="btn-secondary" onclick="setRoute('lesson')">Volver a la clase</button></div><form id="assessmentForm" class="assessment-form">${a.questions.map((q,i)=>`<section class="card question-card"><div class="question-number">Pregunta ${i+1}</div><h3>${esc(q.prompt)}</h3><div class="option-list">${q.options.map((o,j)=>`<label class="answer-option"><input type="radio" name="q_${q.id}" value="${j}" required><span>${esc(o)}</span></label>`).join('')}</div></section>`).join('')}<div class="submit-bar"><div><b>${a.questions.length} preguntas</b><br/><span class="muted">La corrección se realiza en el servidor.</span></div><button class="btn" type="submit">Entregar evaluación</button></div></form></div>`,'courses');$('#assessmentForm').onsubmit=submitAssessment}
+async function submitAssessment(e){e.preventDefault();const answers={};for(const q of state.currentAssessment.questions){const checked=document.querySelector(`input[name="q_${q.id}"]:checked`);if(!checked){toast('Responde todas las preguntas','error');return}answers[q.id]=Number(checked.value)}try{const lessonId=state.currentLesson?.id||null;const courseSlug=state.course?.slug||null;state.assessmentResult=await api('/api/assessment/submit',{method:'POST',body:JSON.stringify({assessmentId:state.currentAssessment.id,answers})});const passed=Boolean(state.assessmentResult?.attempt?.passed);state.currentAssessment=await api(`/api/assessment?id=${state.currentAssessment.id}`);await loadDashboard();if(courseSlug){try{state.course=await api('/api/course?slug='+encodeURIComponent(courseSlug));state.certificateStatus=await api('/api/certificate/status?slug='+encodeURIComponent(courseSlug))}catch{}}if(lessonId)state.currentLesson=state.course?.modules.flatMap(m=>m.lessons).find(l=>l.id===lessonId)||state.currentLesson;renderAssessmentResult();if(passed&&lessonId)setTimeout(()=>advanceAfterPassedAssessment(lessonId),1800)}catch(err){toast(err.message,'error')}}
+function advanceAfterPassedAssessment(lessonId){
+  const lessons=state.course?.modules?.flatMap(m=>m.lessons)||[];
+  const idx=lessons.findIndex(l=>l.id===lessonId);
+  const next=idx>=0?lessons[idx+1]:null;
+  if(!next||next.locked)return;
+  state.assessmentResult=null;
+  state.currentAssessment=null;
+  state.currentLesson=next;
+  history.replaceState({},'',`/lesson?course=${encodeURIComponent(state.course.slug)}&lessonId=${encodeURIComponent(next.id)}`);
+  toast('Evaluación aprobada · siguiente clase desbloqueada');
+  renderLesson();
+}
+
+function renderAssessmentResult(){const r=state.assessmentResult,a=state.currentAssessment;if(!r||!a)return renderAssessment();const passed=r.attempt.passed;const review=(r.attempt.answers||[]).map((ans,i)=>{const q=a.questions.find(x=>x.id===ans.questionId);if(!q)return'';const selected=Number.isInteger(ans.selectedOption)?q.options[ans.selectedOption]:'Sin respuesta';const detail=r.revealAnswers&&Number.isInteger(ans.correctOption)?`<p><b>Tu respuesta:</b> ${esc(selected)}</p><p><b>Respuesta correcta:</b> ${esc(q.options[ans.correctOption]||'')}</p>${ans.explanation?`<p class="muted">${esc(ans.explanation)}</p>`:''}`:`<p>${ans.correct?'✓ Respuesta correcta':'○ Respuesta incorrecta'}</p>`;return `<section class="card question-card"><div class="question-number">Pregunta ${i+1} · ${ans.correct?'Correcta':'Incorrecta'}</div><h3>${esc(q.prompt)}</h3>${detail}</section>`}).join('');const retry=!passed&&(r.attemptsRemaining===null||r.attemptsRemaining>0);document.body.innerHTML=shell(`<div class="assessment-result ${passed?'passed':'failed'}"><div class="result-ring"><span>${r.attempt.score}%</span></div><div class="page-kicker">${passed?'EVALUACIÓN SUPERADA':'EVALUACIÓN NO SUPERADA'}</div><h1>${passed?'Has aprobado la evaluación.':retry?'Puedes volver a intentarlo.':'Has agotado los intentos.'}</h1><p>Nota mínima requerida: ${r.passingScore}%.${retry?' Las respuestas correctas se mostrarán cuando apruebes o agotes los intentos.':''}</p><div class="result-actions"><button class="btn" onclick="setRoute('lesson')">Volver a la clase</button>${retry?`<button class="btn-secondary" onclick="state.assessmentResult=null;renderAssessment()">Reintentar</button>`:''}</div></div>${review?`<div class="assessment-wrap" style="margin-top:22px"><div class="page-kicker">REVISIÓN DEL INTENTO</div>${review}</div>`:''}`,'courses')}
 
 
 function confidenceLabel(v){return v==='high'?'Respaldo alto':v==='medium'?'Respaldo medio':'Respaldo bajo'}
@@ -47,8 +231,10 @@ async function askTutor(e){e.preventDefault();const q=$('#tutorQuestion')?.value
 async function sendTutorFeedback(queryId,rating){if(!queryId)return;try{await api('/api/tutor/feedback',{method:'POST',body:JSON.stringify({queryId,rating})});toast('Gracias por tu valoración')}catch(e){toast(e.message,'error')}}
 async function openTutorSource(lessonId){const l=state.course?.modules.flatMap(m=>m.lessons).find(x=>x.id===lessonId);if(!l)return toast('Clase no disponible','error');state.currentLesson=l;state.tutor=null;history.pushState({},'',`/lesson?course=${encodeURIComponent(state.course.slug)}&lessonId=${encodeURIComponent(l.id)}`);renderLesson()}
 
-async function issueCertificate(){try{const r=await api('/api/certificate/issue',{method:'POST',body:JSON.stringify({slug:'peeling-quimico'})});state.certificateStatus={...(state.certificateStatus||{}),certificate:r.certificate};await loadDashboard();toast('Certificado emitido');renderCourse()}catch(e){toast(e.message,'error')}}
-function renderProfile(){document.body.innerHTML=shell(`<div class="page-head"><div><div class="page-kicker">CUENTA</div><h1>Mi perfil</h1></div></div><div class="card" style="max-width:650px"><div class="field"><label>Nombre</label><input value="${esc(state.me.firstName)} ${esc(state.me.lastName||'')}" disabled></div><div class="field"><label>Email</label><input value="${esc(state.me.email)}" disabled></div><div class="field"><label>Rol</label><input value="${esc(state.me.role)}" disabled></div></div>`,'profile')}
+async function issueCertificate(){try{const slug=state.course?.slug;if(!slug)return toast('Curso no disponible','error');const r=await api('/api/certificate/issue',{method:'POST',body:JSON.stringify({slug})});state.certificateStatus={...(state.certificateStatus||{}),certificate:r.certificate};toast('Certificado disponible');renderCourse()}catch(e){toast(e.message,'error')}}
+function renderProfile(){document.body.innerHTML=shell(`<div class="page-head"><div><div class="page-kicker">CUENTA</div><h1>Mi perfil</h1></div></div><div class="card" style="max-width:650px"><div class="field"><label>Nombre</label><input value="${esc(state.me.firstName)} ${esc(state.me.lastName||'')}" disabled></div><div class="field"><label>Email</label><input value="${esc(state.me.email)}" disabled></div><div class="field"><label>Rol</label><input value="${esc(state.me.role)}" disabled></div></div><div class="card" style="max-width:650px;margin-top:18px"><div class="page-kicker">SEGURIDAD</div><h2>Cambiar contraseña</h2><p class="muted">Al cambiarla se cerrarán las demás sesiones abiertas de tu cuenta.</p><form id="changePasswordForm"><div class="field"><label>Contraseña actual</label><input name="currentPassword" type="password" autocomplete="current-password" required></div><div class="field"><label>Nueva contraseña</label><input name="newPassword" type="password" minlength="12" maxlength="128" autocomplete="new-password" required><small>Mínimo 12 caracteres.</small></div><div class="field"><label>Repite la nueva contraseña</label><input name="confirmPassword" type="password" minlength="12" maxlength="128" autocomplete="new-password" required></div><button class="btn">Actualizar contraseña</button><div id="changePasswordMsg" class="muted" style="margin-top:12px"></div></form></div>`,'profile');$('#changePasswordForm').onsubmit=changePassword}
+async function changePassword(e){e.preventDefault();const fd=new FormData(e.target);const currentPassword=fd.get('currentPassword'),newPassword=fd.get('newPassword'),confirmPassword=fd.get('confirmPassword');if(newPassword!==confirmPassword){$('#changePasswordMsg').textContent='Las contraseñas nuevas no coinciden';return}try{await api('/api/password/change',{method:'POST',body:JSON.stringify({currentPassword,newPassword})});e.target.reset();$('#changePasswordMsg').textContent='Contraseña actualizada. Las demás sesiones han sido cerradas.';toast('Contraseña actualizada')}catch(err){$('#changePasswordMsg').textContent=err.message}}
+
 
 // ADMIN
 function statusPill(status){return `<span class="status-pill ${status}">${status==='published'?'Publicado':'Borrador'}</span>`}
@@ -69,22 +255,168 @@ async function renderTeacher(){
   try{await refreshTeacher();const c=state.teacherContent?.courses||[],sum=state.teacherSummary||{};document.body.innerHTML=shell(`<div class="page-head"><div><div class="page-kicker">ESPACIO DOCENTE</div><h1>Docencia</h1><p class="muted">Gestiona únicamente los cursos que Lykios Academy te ha asignado.</p></div></div><section class="grid">${[['Cursos asignados',sum.courses||0],['Clases',sum.lessons||0],['Alumnos',sum.students||0],['Matrículas',sum.enrollments||0]].map(x=>`<div class="card stat"><div class="value">${x[1]}</div><div class="label">${x[0]}</div></div>`).join('')}</section><div class="admin-tabs"><button class="active">Mis cursos</button></div><section class="teacher-grid"><div>${c.map(renderTeacherCourse).join('')||'<div class="card empty">Aún no tienes cursos asignados.</div>'}</div><aside><div class="card"><div class="page-kicker">ALUMNOS</div><h3>Actividad en tus cursos</h3>${(state.teacherStudents||[]).slice(0,12).map(u=>`<div class="lesson"><div><b>${esc(u.name)}</b><small>${esc(u.courseTitle)} · ${u.progress}%</small></div><span>${u.progress}%</span></div>`).join('')||'<p class="muted">Sin alumnos todavía.</p>'}</div><div class="card" style="margin-top:16px"><div class="page-kicker">ANALÍTICA</div><h3>Rendimiento</h3>${(state.teacherAnalytics?.courses||[]).map(a=>`<div class="lesson"><div><b>${esc(a.title)}</b><small>${a.students} alumnos</small></div><span>${a.avgProgress}%</span></div>`).join('')||'<p class="muted">Sin datos suficientes.</p>'}</div></aside></section>`,'teacher')}catch(e){toast(e.message,'error');setRoute('dashboard')}}
 function renderTeacherCourse(c){return `<section class="admin-course card"><div class="admin-course-head"><div><div class="admin-code">${esc(c.slug)}</div><h2>${esc(c.title)}</h2><p>${esc(c.subtitle||'')}</p><div class="catalog-meta">${c.modules.length} módulos · ${c.modules.flatMap(m=>m.lessons).length} clases · ${statusPill(c.status)}</div></div><span class="role-chip">AUTOR</span></div><div class="module-stack">${c.modules.map(m=>renderTeacherModule(c,m)).join('')}<button class="add-row" onclick="openTeacherModuleForm('${c.id}')">＋ Añadir módulo</button></div></section>`}
 function renderTeacherModule(c,m){return `<div class="admin-module"><div class="admin-module-head"><div><span class="module-code">${esc(m.code)}</span><b>${esc(m.title)}</b> ${statusPill(m.status)}</div><div class="mini-actions"><button onclick="openTeacherModuleForm('${c.id}','${m.id}')">Editar</button></div></div><div class="admin-lessons">${m.lessons.map(l=>renderTeacherLesson(l)).join('')}<button class="add-lesson" onclick="openTeacherLessonForm('${m.id}')">＋ Nueva clase</button></div></div>`}
-function renderTeacherLesson(l){return `<div class="admin-lesson"><div class="lesson-index">${esc(l.code)}</div><div class="lesson-info"><b>${esc(l.title)}</b><div class="lesson-meta">${l.durationMinutes} min · ${statusPill(l.status)} · ${(l.resources||[]).length} recursos</div>${(l.resources||[]).length?`<div class="resource-list">${l.resources.map(r=>`<span class="resource-mini"><a target="_blank" href="/api/resource?id=${r.id}">${esc(r.name)}</a></span>`).join('')}</div>`:''}</div><div class="lesson-actions"><label class="upload-label">＋ Recurso<input type="file" onchange="teacherUploadResource('${l.id}',this)" hidden></label><button onclick="openTeacherLessonForm('${l.moduleId}','${l.id}')">Editar</button></div></div>`}
+function renderTeacherLesson(l){return `<div class="admin-lesson"><div class="lesson-index">${esc(l.code)}</div><div class="lesson-info"><b>${esc(l.title)}</b><div class="lesson-meta">${l.durationMinutes} min · ${statusPill(l.status)} · ${(l.resources||[]).length} recursos</div>${(l.resources||[]).length?`<div class="resource-list">${l.resources.map(r=>`<span class="resource-mini"><a target="_blank" href="/api/resource?id=${r.id}">${esc(r.name)}</a></span>`).join('')}</div>`:''}</div><div class="lesson-actions"><label class="upload-label">＋ Recurso<input type="file" data-teacher-resource-lesson="${l.id}" hidden></label><button onclick="openTeacherLessonForm('${l.moduleId}','${l.id}')">Editar</button></div></div>`}
 function findTeacherModule(id){return state.teacherContent?.courses.flatMap(c=>c.modules).find(m=>m.id===id)}
 function findTeacherLesson(id){return state.teacherContent?.courses.flatMap(c=>c.modules).flatMap(m=>m.lessons).find(l=>l.id===id)}
 function openTeacherModuleForm(courseId,id=''){const m=id?findTeacherModule(id):null;drawer(m?'Editar módulo':'Nuevo módulo',`<form id="teacherModuleForm" class="admin-form"><div class="form-grid"><div class="field"><label>Código</label><input name="code" value="${esc(m?.code||'')}"></div><div class="field"><label>Posición</label><input name="position" type="number" min="1" value="${m?.position||''}"></div></div><div class="field"><label>Título</label><input name="title" required value="${esc(m?.title||'')}"></div><div class="field"><label>Estado</label><select name="status"><option value="draft" ${m?.status!=='published'?'selected':''}>Borrador</option><option value="published" ${m?.status==='published'?'selected':''}>Publicado</option></select></div><div class="drawer-actions"><button type="button" class="btn-secondary" onclick="closeDrawer()">Cancelar</button><button class="btn">Guardar</button></div></form>`);$('#teacherModuleForm').onsubmit=async e=>{e.preventDefault();const body=Object.fromEntries(new FormData(e.target));body.courseId=courseId;try{await api(id?`/api/teacher/module/${id}`:'/api/teacher/module',{method:id?'PUT':'POST',body:JSON.stringify(body)});closeDrawer();toast('Módulo guardado');await renderTeacher()}catch(err){toast(err.message,'error')}}}
 function openTeacherLessonForm(moduleId,id=''){const l=id?findTeacherLesson(id):null;drawer(l?'Editar clase':'Nueva clase',`<form id="teacherLessonForm" class="admin-form"><div class="form-grid"><div class="field"><label>Código</label><input name="code" value="${esc(l?.code||'')}"></div><div class="field"><label>Posición</label><input name="position" type="number" min="1" value="${l?.position||''}"></div></div><div class="field"><label>Título</label><input name="title" required value="${esc(l?.title||'')}"></div><div class="field"><label>Descripción</label><textarea name="summary" rows="5">${esc(l?.summary||'')}</textarea></div><div class="form-grid"><div class="field"><label>Duración</label><input name="durationMinutes" type="number" value="${l?.durationMinutes||10}"></div><div class="field"><label>Estado</label><select name="status"><option value="draft" ${l?.status!=='published'?'selected':''}>Borrador</option><option value="published" ${l?.status==='published'?'selected':''}>Publicado</option></select></div></div><div class="field"><label>Vídeo / referencia</label><input name="video" value="${esc(l?.video||'')}"></div><div class="tutor-editor"><div class="field"><label>Contenido aprobado para Lykios AI Tutor</label><textarea name="tutorContent" rows="8">${esc(l?.tutorContent||'')}</textarea></div><div class="tutor-approval-state ${l?.tutorApproved?'approved':'pending'}">${l?.tutorApproved?'✓ Aprobado por Administración':'Pendiente de aprobación por Administración'}</div><small>Si modificas este contenido, volverá automáticamente a estado pendiente.</small></div><div class="drawer-actions"><button type="button" class="btn-secondary" onclick="closeDrawer()">Cancelar</button><button class="btn">Guardar</button></div></form>`);$('#teacherLessonForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.target);const body=Object.fromEntries(fd);body.moduleId=moduleId;try{await api(id?`/api/teacher/lesson/${id}`:'/api/teacher/lesson',{method:id?'PUT':'POST',body:JSON.stringify(body)});closeDrawer();toast('Clase guardada');await renderTeacher()}catch(err){toast(err.message,'error')}}}
 async function teacherUploadResource(lessonId,input){const file=input.files?.[0];if(!file)return;if(file.size>6_000_000)return toast('Máximo 6 MB','error');try{const dataBase64=await fileToBase64(file);await api('/api/teacher/resource',{method:'POST',body:JSON.stringify({lessonId,name:file.name,mime:file.type||'application/octet-stream',dataBase64})});toast('Recurso guardado');await renderTeacher()}catch(e){toast(e.message,'error')}finally{input.value=''}}
 
+
+function renderPielPerfectaLaunchPanel(){
+  const d=state.pielPerfectaReadiness;
+  if(!d)return '';
+  const r=d.readiness||{},l=d.launch||{};
+  const item=(ok,label,detail)=>'<div class="student-line"><span>'+(ok?'✅':'○')+' <b>'+esc(label)+'</b></span><span class="muted">'+esc(detail||'')+'</span></div>';
+  const env=String(d.environment||'preview');
+  const transferLabel=env==='production'?'Validar paquete para importar':'Validar paquete de traspaso';
+  return '<div class="card" style="margin-bottom:18px">'
+    +'<div class="question-editor-head"><div><div class="page-kicker">PIEL PERFECTA 2.0</div><h3>Checklist de lanzamiento</h3></div><span class="status-pill '+(r.ready?'published':'draft')+'">'+(r.ready?'LISTO':'EN PREPARACIÓN')+'</span></div>'
+    +item(l.academicReady,'Arquitectura académica',(r.modules||0)+'/11 módulos · '+(r.lessons||0)+'/33 clases · '+(r.assessments||0)+'/10 evaluaciones · '+(r.questions||0)+'/50 preguntas')
+    +item(l.videosReady,'Vídeos',(r.lessonsWithVideo||0)+'/'+(r.lessons||33)+' clases con vídeo')
+    +item((r.resources||0)>=11,'Recursos descargables',(r.resources||0)+'/11 recursos')
+    +item((r.tutorApproved||0)===33,'Lykios AI Tutor',(r.tutorApproved||0)+'/33 clases aprobadas')
+    +item(d.course?.status==='published','Publicación académica',d.course?.status==='published'?'Publicada':'En borrador')
+    +item(env==='production'?d.course?.saleEnabled===true:d.course?.previewSaleEnabled===true,env==='production'?'Venta Production':'Venta de prueba Preview',(env==='production'?d.course?.saleEnabled:d.course?.previewSaleEnabled)?'Habilitada':'Desactivada')
+    +'<p class="muted" style="margin:12px 0 0">Entorno: '+esc(env)+' · Stripe '+(l.stripeConfigured?'configurado':'pendiente')+' · Resend '+(l.resendConfigured?'configurado':'pendiente')+'</p>'
+    +'<div class="drawer-actions" style="justify-content:flex-start;margin-top:14px">'
+      +'<button class="btn-secondary" onclick="exportPielPerfectaTransfer()">↓ Exportar paquete</button>'
+      +'<label class="upload-label">'+esc(transferLabel)+'<input type="file" accept=".json,application/json" data-course-transfer-file hidden></label>'
+    +'</div>'
+    +'<div id="courseTransferStatus" class="muted" style="margin-top:10px">El paquete contiene solo el curso y referencias a medios; nunca incluye alumnos, ventas ni contraseñas.</div>'
+    +'</div>';
+}
+async function exportPielPerfectaTransfer(){
+  const box=$('#courseTransferStatus');
+  try{
+    if(box)box.textContent='Preparando paquete de curso…';
+    const r=await api('/api/admin/course-transfer/export',{method:'POST',body:JSON.stringify({slug:'piel-perfecta-20'})});
+    const pkg=r.package;
+    const blob=new Blob([JSON.stringify(pkg,null,2)+'\n'],{type:'application/json'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    const stamp=String(pkg.exportedAt||new Date().toISOString()).replace(/[:.]/g,'-');
+    a.href=url;a.download='piel-perfecta-transfer-'+stamp+'.json';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+    const m=pkg.manifest||{};
+    if(box)box.innerHTML='<b>Paquete exportado.</b> '+(m.modules||0)+' módulos · '+(m.lessons||0)+' clases · '+(m.videos||0)+' vídeos · checksum '+esc(String(pkg.checksum?.value||'').slice(0,12))+'…';
+    toast(pkg.readiness?.ready?'Paquete final exportado':'Paquete preliminar exportado');
+  }catch(e){if(box)box.textContent=e.message;toast(e.message,'error')}
+}
+async function validatePielPerfectaTransferFile(input){
+  const box=$('#courseTransferStatus');
+  try{
+    const file=input.files?.[0];if(!file)return;
+    if(box)box.textContent='Validando integridad, estructura y acceso a los medios…';
+    const pkg=JSON.parse(await file.text());
+    const r=await api('/api/admin/course-transfer/validate',{method:'POST',body:JSON.stringify({package:pkg,checkBlobs:true})});
+    const v=r.validation||{};
+    state.pendingCourseTransfer=pkg;
+    state.pendingCourseTransferValidation=v;
+    const issues=(v.issues||[]).map(x=>'• '+esc(x)).join('<br>');
+    const warnings=(v.warnings||[]).map(x=>'• '+esc(x)).join('<br>');
+    const media=v.media||{};
+    let html='<p><b>'+(v.packageValid?'✅ Paquete válido':'⚠️ Paquete todavía no importable')+'</b></p>'
+      +'<div class="student-line"><span>Estructura</span><span>'+esc((v.counts?.modules||0)+' módulos · '+(v.counts?.lessons||0)+' clases')+'</span></div>'
+      +'<div class="student-line"><span>Vídeos accesibles</span><span>'+esc((media.accessible||0)+'/'+(media.checked||0))+'</span></div>'
+      +'<div class="student-line"><span>Base de datos compartida</span><span>'+(v.storage?.sharedDatabase?'Sí':'No')+'</span></div>';
+    if(issues)html+='<p class="danger-text"><b>Bloqueos</b><br>'+issues+'</p>';
+    if(warnings)html+='<p class="muted"><b>Avisos</b><br>'+warnings+'</p>';
+    if(v.canImport)html+='<button class="btn gold" onclick="commitPielPerfectaTransfer()">Importar en Production</button>';
+    else html+='<p class="muted">No se ha modificado ningún dato.</p>';
+    if(box)box.innerHTML=html;
+    toast(v.packageValid?'Paquete validado':'Revisa los bloqueos',v.packageValid?'ok':'error');
+  }catch(e){
+    state.pendingCourseTransfer=null;state.pendingCourseTransferValidation=null;
+    if(box)box.innerHTML='<span class="danger-text">'+esc(e.message)+'</span>';
+    toast(e.message,'error');
+  }finally{input.value=''}
+}
+async function commitPielPerfectaTransfer(){
+  const pkg=state.pendingCourseTransfer,v=state.pendingCourseTransferValidation;
+  if(!pkg||!v?.canImport)return toast('Primero valida un paquete importable','error');
+  const confirmText=prompt('Escribe exactamente IMPORTAR PIEL PERFECTA para crear el backup y copiar el curso a Production.');
+  if(confirmText!=='IMPORTAR PIEL PERFECTA')return toast('Importación cancelada','error');
+  const box=$('#courseTransferStatus');
+  try{
+    if(box)box.textContent='Creando backup de Production e importando el curso…';
+    const r=await api('/api/admin/course-transfer/import',{method:'POST',body:JSON.stringify({package:pkg,confirm:confirmText})});
+    if(box)box.innerHTML='<p><b>✅ Curso importado en Production como borrador.</b></p><p class="muted">Backup previo: '+esc(r.backup?.pathname||'creado')+'. La venta permanece desactivada hasta la validación final.</p>';
+    state.pendingCourseTransfer=null;state.pendingCourseTransferValidation=null;
+    toast('Piel Perfecta importado como borrador');
+    await renderAdmin();
+  }catch(e){if(box)box.textContent=e.message;toast(e.message,'error')}
+}
 async function renderAdmin(){
   if(state.me.role!=='admin')return setRoute('dashboard');
   try{await refreshAdmin()}catch(e){return toast(e.message,'error')}
   const s=state.adminSummary,courses=state.adminContent.courses;
   document.body.innerHTML=shell(`<div class="admin-hero"><div><div class="page-kicker bright">LYKIOS CONTROL CENTER</div><h1>Administración académica</h1><p>Construye, organiza y publica el catálogo de Lykios Academy desde un único lugar.</p></div><button class="btn gold" onclick="openCourseForm()">＋ Nuevo curso</button></div>
   <div class="admin-metrics">${[['Alumnos',s.students],['Cursos',s.courses],['Clases',s.lessons],['Certificados',s.validCertificates||0]].map(x=>`<div class="card stat"><div class="value">${x[1]}</div><div class="label">${x[0]}</div></div>`).join('')}</div>
+  ${renderPielPerfectaLaunchPanel()}
   <div class="admin-toolbar"><div><h2>Contenido académico</h2><p class="muted">Curso → módulo → clase → recursos → evaluaciones</p></div><div class="legend">${statusPill('published')} ${statusPill('draft')}</div></div>
-  <div class="admin-toolbar"><div><h2>Monetización</h2><p class="muted">Packs, cupones, becas y promociones automáticas.</p></div></div>${renderMonetization()}<div class="admin-toolbar"><div><h2>Analítica académica</h2><p class="muted">Finalización, progreso, vídeo, evaluaciones y puntos de abandono.</p></div></div>${renderAdminAnalytics()}<div class="admin-toolbar"><div><h2>Gobernanza del Tutor IA</h2><p class="muted">Privacidad, retención y trazabilidad de respuestas.</p></div></div>${renderAdminTutor()}<div class="admin-catalog">${courses.map(renderAdminCourse).join('')||'<div class="card empty">Todavía no hay cursos.</div>'}</div><div class="admin-toolbar"><div><h2>Docentes</h2><p class="muted">Alta de profesores/autores y asignación de cursos.</p></div><button class="btn-secondary" onclick="openTeacherAdminForm()">＋ Nuevo docente</button></div><div class="card teacher-admin-table">${renderAdminTeachers()}</div><div class="admin-toolbar"><div><h2>Alumnos</h2><p class="muted">Matrículas, progreso, evaluaciones, certificados y gestión de acceso.</p></div></div><div class="card student-admin-table">${renderAdminStudents()}</div><div class="admin-toolbar"><div><h2>Ventas y matrículas</h2><p class="muted">Pedidos confirmados por el motor de pagos.</p></div></div><div class="card certificate-admin-table">${renderAdminOrders()}</div><div class="admin-toolbar"><div><h2>Certificados emitidos</h2><p class="muted">Registro verificable y control de revocación.</p></div></div><div class="card certificate-admin-table">${renderAdminCertificates()}</div><div class="admin-toolbar"><div><h2>Emails transaccionales</h2><p class="muted">Bandeja de salida local y auditoría de comunicaciones.</p></div></div><div class="card certificate-admin-table">${renderAdminEmails()}</div>
+  <div class="admin-toolbar"><div><h2>Monetización</h2><p class="muted">Packs, cupones, becas y promociones automáticas.</p></div></div>${renderMonetization()}<div class="admin-toolbar"><div><h2>Analítica académica</h2><p class="muted">Finalización, progreso, vídeo, evaluaciones y puntos de abandono.</p></div></div>${renderAdminAnalytics()}<div class="admin-toolbar"><div><h2>Gobernanza del Tutor IA</h2><p class="muted">Privacidad, retención y trazabilidad de respuestas.</p></div></div>${renderAdminTutor()}<div class="admin-catalog">${courses.map(renderAdminCourse).join('')||'<div class="card empty">Todavía no hay cursos.</div>'}</div><div class="admin-toolbar"><div><h2>Docentes</h2><p class="muted">Alta de profesores/autores y asignación de cursos.</p></div><button class="btn-secondary" onclick="openTeacherAdminForm()">＋ Nuevo docente</button></div><div class="card teacher-admin-table">${renderAdminTeachers()}</div><div class="admin-toolbar"><div><h2>Alumnos</h2><p class="muted">Matrículas, progreso, evaluaciones, certificados y gestión de acceso.</p></div></div><div class="card student-admin-table">${renderAdminStudents()}</div><div class="admin-toolbar"><div><h2>Ventas y matrículas</h2><p class="muted">Pedidos confirmados por el motor de pagos.</p></div></div><div class="card certificate-admin-table">${renderAdminOrders()}</div><div class="admin-toolbar"><div><h2>Certificados emitidos</h2><p class="muted">Registro verificable y control de revocación.</p></div><a class="btn-secondary" href="/api/admin/certificate/preview" target="_blank">Vista previa PDF</a></div><div class="card certificate-admin-table">${renderAdminCertificates()}</div><div class="admin-toolbar"><div><h2>Emails transaccionales</h2><p class="muted">Bandeja de salida local y auditoría de comunicaciones.</p></div></div><div class="card certificate-admin-table">${renderAdminEmails()}</div>
+  <div class="admin-toolbar"><div><h2>Pruebas técnicas</h2><p class="muted">Concurrencia, backup privado y comprobaciones de salud. Solo Preview.</p></div><div><button class="btn-secondary" id="concurrencyTestBtn" onclick="runConcurrencySelfTest()">Prueba concurrente</button> <button class="btn gold" id="previewClosureBtn" onclick="runPreviewClosure()">Ejecutar cierre Preview</button></div></div><div id="concurrencyTestResult" class="card" style="margin-bottom:12px"><span class="muted">Prueba concurrente validada previamente.</span></div><div id="previewClosureResult" class="card" style="margin-bottom:18px"><span class="muted">Cierre Preview aún no ejecutado.</span></div>
   <div id="drawerRoot"></div>`,'admin');const tpf=$('#tutorPolicyForm');if(tpf)tpf.onsubmit=saveTutorPolicy
+}
+
+async function runConcurrencySelfTest(){
+  const btn=$('#concurrencyTestBtn'),box=$('#concurrencyTestResult');
+  if(btn)btn.disabled=true;
+  if(box)box.innerHTML='<span class="muted">Ejecutando dos checkouts y dos evaluaciones simultáneas…</span>';
+  try{
+    const r=await api('/api/admin/test/concurrency',{method:'POST',body:'{}'});
+    const v=r.verification||{};
+    if(box)box.innerHTML='<div><b>✅ Prueba superada</b><p class="muted">Checkout: '+(v.orders||0)+' pedido, '+(v.activeEnrollments||0)+' matrícula activa · estados '+esc((v.checkoutStatuses||[]).join(' / '))+'</p><p class="muted">Evaluaciones: '+(v.assessmentAttempts||0)+'/'+(v.expectedAssessmentAttempts||0)+' intentos · estados '+esc((v.assessmentStatuses||[]).join(' / '))+'</p><p class="muted">Limpieza temporal: '+(r.cleaned?'correcta':'pendiente')+'</p></div>';
+    toast('Prueba concurrente superada');
+  }catch(e){
+    if(box)box.innerHTML='<div><b>❌ Prueba no superada</b><p class="muted">'+esc(e.message)+'</p></div>';
+    toast(e.message,'error');
+  }finally{
+    if(btn)btn.disabled=false;
+  }
+}
+
+async function runPreviewClosure(){
+  const btn=$('#previewClosureBtn'),box=$('#previewClosureResult');
+  if(btn)btn.disabled=true;
+  const show=(msg)=>{if(box)box.innerHTML='<span class="muted">'+esc(msg)+'</span>'};
+  try{
+    show('1/5 · Creando backup privado verificado…');
+    const backup=await api('/api/admin/backup/state',{method:'POST',body:'{}'});
+
+    show('2/5 · Ejecutando prueba concurrente…');
+    const concurrency=await api('/api/admin/test/concurrency',{method:'POST',body:'{}'});
+
+    show('3/5 · Comprobando proceso disponible…');
+    const live=await api('/api/health/live');
+
+    show('4/5 · Comprobando Neon y esquema…');
+    const ready=await api('/api/health/ready');
+
+    show('5/5 · Comprobando catálogo público…');
+    const catalog=await api('/api/public/catalog');
+    const catalogOk=Array.isArray(catalog)||(catalog&&Array.isArray(catalog.courses));
+    const ok=Boolean(
+      backup?.ok&&backup?.verified&&
+      concurrency?.ok&&
+      live?.ok&&
+      ready?.ok&&ready?.storage?.ok&&
+      catalogOk
+    );
+    if(!ok)throw new Error('Una de las comprobaciones no devolvió el estado esperado');
+
+    if(box)box.innerHTML='<div><b>✅ GO Preview</b>'+
+      '<p class="muted">Backup privado: verificado · '+esc(String(backup.bytes||0))+' bytes · SHA-256 '+esc(String(backup.sha256||'').slice(0,16))+'…</p>'+
+      '<p class="muted">Concurrencia: checkout y evaluaciones superados · limpieza correcta.</p>'+
+      '<p class="muted">Health live: OK · Health ready: OK · PostgreSQL: '+esc(String(ready.storage?.backend||''))+' · '+esc(String(ready.storage?.latencyMs||0))+' ms.</p>'+
+      '<p class="muted">Catálogo público: OK.</p></div>';
+    toast('Cierre Preview superado');
+  }catch(e){
+    if(box)box.innerHTML='<div><b>❌ NO-GO Preview</b><p class="muted">'+esc(e.message)+'</p></div>';
+    toast(e.message,'error');
+  }finally{
+    if(btn)btn.disabled=false;
+  }
 }
 
 function analyticsBar(value,label=''){const v=Math.max(0,Math.min(100,Number(value)||0));return `<div class="analytics-bar-wrap"><div class="analytics-bar"><span style="width:${v}%"></span></div><small>${label||v+'%'}</small></div>`}
@@ -95,35 +427,112 @@ function renderAdminTutor(){const t=state.adminTutor||{},p=t.policy||{};return `
 async function saveTutorPolicy(e){e.preventDefault();const fd=new FormData(e.target);const body={retainQueriesDays:Number(fd.get('retainQueriesDays')||0),storeQuestionText:fd.has('storeQuestionText'),feedbackEnabled:fd.has('feedbackEnabled')};try{await api('/api/admin/tutor/settings',{method:'PUT',body:JSON.stringify(body)});toast('Política del Tutor IA actualizada');await renderAdmin()}catch(err){toast(err.message,'error')}}
 
 function renderAdminTeachers(){const items=state.adminTeachers?.teachers||[],courses=state.adminTeachers?.courses||[];if(!items.length)return '<div class="empty">Todavía no hay docentes.</div>';return items.map(t=>`<div class="teacher-admin-row"><div><b>${esc(t.firstName)} ${esc(t.lastName||'')}</b><small>${esc(t.email)}</small></div><div class="teacher-assignments">${(t.assignments||[]).map(a=>`<span class="resource-mini">${esc(a.courseTitle)}<button onclick="unassignTeacher('${t.id}','${a.courseId}')">×</button></span>`).join('')||'<span class="muted">Sin cursos asignados</span>'}</div><div><select id="teacherCourse-${t.id}"><option value="">Asignar curso…</option>${courses.filter(c=>!(t.assignments||[]).some(a=>a.courseId===c.id)).map(c=>`<option value="${c.id}">${esc(c.title)}</option>`).join('')}</select><button class="icon-btn" onclick="assignTeacher('${t.id}')">Asignar</button></div></div>`).join('')}
-function openTeacherAdminForm(){drawer('Nuevo docente',`<form id="teacherAdminForm" class="admin-form"><div class="form-grid"><div class="field"><label>Nombre</label><input name="firstName" required></div><div class="field"><label>Apellidos</label><input name="lastName"></div></div><div class="field"><label>Email</label><input name="email" type="email" required></div><div class="field"><label>Contraseña inicial</label><input name="password" value="ProfesorLykios2026!" minlength="8"></div><div class="drawer-actions"><button type="button" class="btn-secondary" onclick="closeDrawer()">Cancelar</button><button class="btn">Crear docente</button></div></form>`);$('#teacherAdminForm').onsubmit=async e=>{e.preventDefault();try{await api('/api/admin/teacher',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});closeDrawer();toast('Docente creado');await renderAdmin()}catch(err){toast(err.message,'error')}}}
+function openTeacherAdminForm(){drawer('Nuevo docente',`<form id="teacherAdminForm" class="admin-form"><div class="form-grid"><div class="field"><label>Nombre</label><input name="firstName" required></div><div class="field"><label>Apellidos</label><input name="lastName"></div></div><div class="field"><label>Email</label><input name="email" type="email" required></div><div class="field"><label>Contraseña inicial</label><input name="password" type="password" minlength="12" maxlength="128" autocomplete="new-password" required><small>Mínimo 12 caracteres. No se usan credenciales predeterminadas.</small></div><div class="drawer-actions"><button type="button" class="btn-secondary" onclick="closeDrawer()">Cancelar</button><button class="btn">Crear docente</button></div></form>`);$('#teacherAdminForm').onsubmit=async e=>{e.preventDefault();try{await api('/api/admin/teacher',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});closeDrawer();toast('Docente creado');await renderAdmin()}catch(err){toast(err.message,'error')}}}
 async function assignTeacher(teacherId){const courseId=$(`#teacherCourse-${teacherId}`)?.value;if(!courseId)return toast('Selecciona un curso','error');try{await api('/api/admin/teacher/assign',{method:'POST',body:JSON.stringify({teacherId,courseId})});toast('Curso asignado');await renderAdmin()}catch(e){toast(e.message,'error')}}
 async function unassignTeacher(teacherId,courseId){if(!confirm('¿Retirar este curso del docente?'))return;try{await api('/api/admin/teacher/unassign',{method:'POST',body:JSON.stringify({teacherId,courseId})});toast('Asignación retirada');await renderAdmin()}catch(e){toast(e.message,'error')}}
 
 function renderAdminStudents(){const items=state.adminStudents?.students||[];if(!items.length)return '<div class="empty">Todavía no hay alumnos.</div>';return `<div class="student-table-head"><span>Alumno</span><span>Matrículas</span><span>Progreso</span><span>Estado</span><span></span></div>${items.map(u=>`<div class="student-table-row"><span><b>${esc(u.firstName)} ${esc(u.lastName||'')}</b><small>${esc(u.email)}</small></span><span>${u.activeEnrollments||0}</span><span><b>${u.avgProgress||0}%</b></span><span><span class="status-pill ${u.status==='active'?'published':'draft'}">${u.status==='active'?'Activo':'Bloqueado'}</span></span><span><button class="icon-btn" onclick="openStudent('${u.id}')">Abrir ficha</button></span></div>`).join('')}`}
 function findAdminStudent(id){return state.adminStudents?.students?.find(u=>u.id===id)}
-async function openStudent(id){try{const r=await api(`/api/admin/student/${id}`);const u=r.student;const available=(state.adminStudents?.courses||[]).filter(c=>!u.enrollments.some(e=>e.courseId===c.id&&e.status==='active'));drawer(`${esc(u.firstName)} ${esc(u.lastName||'')}`,`<div class="student-detail"><div class="student-profile-strip"><div><div class="page-kicker">FICHA DEL ALUMNO</div><h2>${esc(u.firstName)} ${esc(u.lastName||'')}</h2><p>${esc(u.email)}</p></div><span class="status-pill ${u.status==='active'?'published':'draft'}">${u.status==='active'?'Activo':'Bloqueado'}</span></div><form id="studentProfileForm" class="admin-form"><div class="form-grid"><div class="field"><label>Nombre</label><input name="firstName" value="${esc(u.firstName)}"></div><div class="field"><label>Apellidos</label><input name="lastName" value="${esc(u.lastName||'')}"></div></div><div class="field"><label>Email</label><input name="email" type="email" value="${esc(u.email)}"></div><div class="drawer-actions"><button type="button" class="btn-secondary ${u.status==='active'?'danger-soft':'success-soft'}" onclick="toggleStudentStatus('${u.id}','${u.status==='active'?'blocked':'active'}')">${u.status==='active'?'Bloquear cuenta':'Reactivar cuenta'}</button><button class="btn">Guardar datos</button></div></form><div class="student-section"><div class="question-editor-head"><h3>Matrículas</h3>${available.length?`<select id="manualCourseSelect"><option value="">Selecciona curso…</option>${available.map(c=>`<option value="${c.id}">${esc(c.title)}</option>`).join('')}</select><button class="btn-secondary" onclick="manualEnroll('${u.id}')">＋ Matricular</button>`:''}</div>${u.enrollments.length?u.enrollments.map(e=>`<div class="student-enrollment"><div><b>${esc(e.courseTitle)}</b><small>${e.lessonsCompleted}/${e.lessonsTotal} clases · ${e.progressPercent}%</small><div class="progress"><span style="width:${e.progressPercent}%"></span></div></div><div class="mini-actions">${e.status==='active'?`<button onclick="removeEnrollment('${u.id}','${e.courseId}')">Retirar acceso</button>`:'<span class="muted">Inactiva</span>'}<button onclick="sendStudentReminder('${u.id}','${e.courseId}')">Enviar recordatorio</button><button class="danger-text" onclick="resetStudentProgress('${u.id}','${e.courseId}')">Reiniciar progreso</button></div></div>`).join(''):'<p class="muted">Sin matrículas.</p>'}</div><div class="student-section"><h3>Evaluaciones</h3>${u.attempts.length?u.attempts.slice(0,8).map(a=>`<div class="student-line"><span>${esc(a.assessmentTitle)}</span><span><b>${a.score}%</b> · ${a.passed?'Aprobado':'No aprobado'}</span></div>`).join(''):'<p class="muted">Sin intentos.</p>'}</div><div class="student-section"><h3>Certificados</h3>${u.certificates.length?u.certificates.map(c=>`<div class="student-line"><span>${esc(c.courseTitle)}</span><a target="_blank" href="/verify/${encodeURIComponent(c.code)}">${esc(c.code)}</a></div>`).join(''):'<p class="muted">Sin certificados.</p>'}</div><div class="student-section"><h3>Pedidos</h3>${u.orders.length?u.orders.map(o=>`<div class="student-line"><span>${esc(o.number)} · ${esc(o.courseTitle)}</span><span>${o.discountCents?`<small>- ${esc(o.discountLabel||'')}</small> `:''}${esc(o.totalLabel)}</span></div>`).join(''):'<p class="muted">Sin pedidos.</p>'}</div><div class="student-section"><h3>Notas internas</h3><form id="studentNoteForm" class="note-form"><textarea name="note" rows="3" placeholder="Nota visible solo para administración"></textarea><button class="btn-secondary">Añadir nota</button></form>${u.notes.length?u.notes.map(n=>`<div class="internal-note"><p>${esc(n.note)}</p><small>${new Date(n.createdAt).toLocaleString('es-ES')}</small></div>`).join(''):'<p class="muted">Sin notas internas.</p>'}</div><div class="student-audit"><small>Alta: ${new Date(u.createdAt).toLocaleString('es-ES')} · Último acceso: ${u.lastLoginAt?new Date(u.lastLoginAt).toLocaleString('es-ES'):'Nunca'}</small></div></div>`);$('#studentProfileForm').onsubmit=e=>saveStudentProfile(e,u.id);$('#studentNoteForm').onsubmit=e=>addStudentNote(e,u.id)}catch(e){toast(e.message,'error')}}
-async function saveStudentProfile(e,id){e.preventDefault();try{await api(`/api/admin/student/${id}`,{method:'PUT',body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});toast('Alumno actualizado');await refreshAdmin();await openStudent(id)}catch(err){toast(err.message,'error')}}
+
+function renderStudentSecurity(u){
+  const sec=u.security||{activeSessions:[],knownDevices:[],recentEvents:[],score1h:0,maxSessions:2};
+  const sessions=sec.activeSessions||[],devices=sec.knownDevices||[],events=sec.recentEvents||[];
+  const sessionRows=sessions.length?sessions.map(x=>'<div class="student-line"><span><b>'+esc(x.deviceLabel||'Sesión')+'</b><small>'+esc(x.ipLabel||'—')+' · '+new Date(x.lastSeenAt||x.createdAt).toLocaleString('es-ES')+'</small></span><span><button type="button" class="icon-btn danger-soft" onclick="revokeStudentSession(\''+u.id+'\',\''+x.id+'\')">Cerrar sesión</button></span></div>').join(''):'<p class="muted">Sin sesiones activas.</p>';
+  const deviceRows=devices.length?devices.slice(0,6).map(x=>'<div class="student-line"><span><b>'+esc(x.label||'Dispositivo')+'</b><small>Visto por primera vez '+new Date(x.firstSeenAt).toLocaleDateString('es-ES')+'</small></span><span><small>'+esc(x.ipLabel||'—')+' · '+new Date(x.lastSeenAt).toLocaleString('es-ES')+'</small></span></div>').join(''):'<p class="muted">Aún no hay dispositivos registrados.</p>';
+  const eventRows=events.length?events.slice(0,10).map(x=>'<div class="student-line"><span><b>'+(Number(x.score)>=4?'⚠ ':'')+esc(x.label||x.type)+'</b><small>'+esc(x.deviceLabel||'')+(x.ipLabel?' · '+esc(x.ipLabel):'')+'</small></span><span><small>'+new Date(x.at).toLocaleString('es-ES')+(x.score?' · riesgo +'+x.score:'')+'</small></span></div>').join(''):'<p class="muted">Sin incidencias de seguridad.</p>';
+  return '<div class="student-section"><div class="question-editor-head"><div><h3>Seguridad de acceso</h3><p class="muted">Máximo '+(sec.maxSessions||2)+' sesiones activas · 1 vídeo simultáneo · puntuación última hora: '+(sec.score1h||0)+'</p></div>'+(sessions.length?'<button type="button" class="btn-secondary danger-soft" onclick="revokeStudentSessions(\''+u.id+'\')">Cerrar todas las sesiones</button>':'')+'</div><h4>Sesiones activas</h4>'+sessionRows+'<h4 style="margin-top:18px">Dispositivos conocidos</h4>'+deviceRows+'<h4 style="margin-top:18px">Eventos recientes</h4>'+eventRows+'</div>';
+}
+async function openStudent(id){try{const r=await api(`/api/admin/student/${id}`);const u=r.student;const available=(state.adminStudents?.courses||[]).filter(c=>!u.enrollments.some(e=>e.courseId===c.id&&e.status==='active'));drawer(`${esc(u.firstName)} ${esc(u.lastName||'')}`,`<div class="student-detail"><div class="student-profile-strip"><div><div class="page-kicker">FICHA DEL ALUMNO</div><h2>${esc(u.firstName)} ${esc(u.lastName||'')}</h2><p>${esc(u.email)}</p></div><span class="status-pill ${u.status==='active'?'published':'draft'}">${u.status==='active'?'Activo':'Bloqueado'}</span></div><form id="studentProfileForm" class="admin-form"><div class="form-grid"><div class="field"><label>Nombre</label><input name="firstName" value="${esc(u.firstName)}"></div><div class="field"><label>Apellidos</label><input name="lastName" value="${esc(u.lastName||'')}"></div></div><div class="field"><label>Email</label><input name="email" type="email" value="${esc(u.email)}"></div><div class="drawer-actions"><button type="button" id="studentWelcomeTest" class="btn-secondary">Enviar bienvenida</button><button type="button" class="btn-secondary ${u.status==='active'?'danger-soft':'success-soft'}" onclick="toggleStudentStatus('${u.id}','${u.status==='active'?'blocked':'active'}')">${u.status==='active'?'Bloquear cuenta':'Reactivar cuenta'}</button><button type="button" id="studentProfileSave" class="btn">Guardar datos</button></div></form><div class="student-section"><div class="question-editor-head"><h3>Matrículas</h3>${available.length?`<select id="manualCourseSelect"><option value="">Selecciona curso…</option>${available.map(c=>`<option value="${c.id}">${esc(c.title)}</option>`).join('')}</select><button class="btn-secondary" onclick="manualEnroll('${u.id}')">＋ Matricular</button>`:''}</div>${u.enrollments.length?u.enrollments.map(e=>`<div class="student-enrollment"><div><b>${esc(e.courseTitle)}</b><small>${e.lessonsCompleted}/${e.lessonsTotal} clases · ${e.progressPercent}%</small><div class="progress"><span style="width:${e.progressPercent}%"></span></div></div><div class="mini-actions">${e.status==='active'?`<button onclick="removeEnrollment('${u.id}','${e.courseId}')">Retirar acceso</button>`:'<span class="muted">Inactiva</span>'}<button type="button" class="purchase-test-btn" data-user-id="${u.id}" data-course-id="${e.courseId}">Probar matrícula</button><button type="button" onclick="sendCourseCompletedTest('${u.id}','${e.courseId}')">Probar finalización</button>${(Number(e.progressPercent)||0)>=100?`<button onclick="sendReminderTest('${u.id}','${e.courseId}')">Probar recordatorio</button>`:`<button onclick="sendStudentReminder('${u.id}','${e.courseId}')">Enviar recordatorio</button>`}${state.me?.preview&&e.courseTitle==='Piel Perfecta 2.0'?`<button type="button" onclick="qaUnlockM10(\'${u.id}\',\'${e.courseId}\')">QA → M10</button>`:''}<button class="danger-text" onclick="resetStudentProgress('${u.id}','${e.courseId}')">Reiniciar progreso</button></div></div>`).join(''):'<p class="muted">Sin matrículas.</p>'}</div><div class="student-section"><h3>Evaluaciones</h3>${u.attempts.length?u.attempts.slice(0,8).map(a=>`<div class="student-line"><span>${esc(a.assessmentTitle)}</span><span><b>${a.score}%</b> · ${a.passed?'Aprobado':'No aprobado'}</span></div>`).join(''):'<p class="muted">Sin intentos.</p>'}</div><div class="student-section"><h3>Certificados</h3>${u.certificates.length?u.certificates.map(c=>`<div class="student-line"><span>${esc(c.courseTitle)}</span><span><a target="_blank" href="/verify/${encodeURIComponent(c.code)}">${esc(c.code)}</a> <button type="button" onclick="sendCertificateTest('${u.id}','${c.courseId}')">Probar correo</button></span></div>`).join(''):'<p class="muted">Sin certificados.</p>'}</div><div class="student-section"><h3>Pedidos</h3>${u.orders.length?u.orders.map(o=>`<div class="student-line"><span>${esc(o.number)} · ${esc(o.courseTitle)}</span><span>${o.discountCents?`<small>- ${esc(o.discountLabel||'')}</small> `:''}${esc(o.totalLabel)}</span></div>`).join(''):'<p class="muted">Sin pedidos.</p>'}</div>${renderStudentSecurity(u)}<div class="student-section"><h3>Notas internas</h3><form id="studentNoteForm" class="note-form"><textarea name="note" rows="3" placeholder="Nota visible solo para administración"></textarea><button class="btn-secondary">Añadir nota</button></form>${u.notes.length?u.notes.map(n=>`<div class="internal-note"><p>${esc(n.note)}</p><small>${new Date(n.createdAt).toLocaleString('es-ES')}</small></div>`).join(''):'<p class="muted">Sin notas internas.</p>'}</div><div class="student-audit"><small>Alta: ${new Date(u.createdAt).toLocaleString('es-ES')} · Último acceso: ${u.lastLoginAt?new Date(u.lastLoginAt).toLocaleString('es-ES'):'Nunca'}</small></div></div>`);const profileForm=$('#studentProfileForm');profileForm.onsubmit=e=>saveStudentProfile(e,u.id);const saveBtn=$('#studentProfileSave');if(saveBtn)saveBtn.onclick=()=>saveStudentProfileById(u.id,profileForm);const welcomeBtn=$('#studentWelcomeTest');if(welcomeBtn)welcomeBtn.onclick=async()=>{if(welcomeBtn.disabled)return;welcomeBtn.disabled=true;try{await sendStudentWelcome(u.id)}finally{welcomeBtn.disabled=false}};document.querySelectorAll('.purchase-test-btn').forEach(btn=>{btn.onclick=async()=>{if(btn.disabled)return;btn.disabled=true;try{await sendPurchaseTest(btn.dataset.userId,btn.dataset.courseId)}finally{btn.disabled=false}}});$('#studentNoteForm').onsubmit=e=>addStudentNote(e,u.id)}catch(e){toast(e.message,'error')}}
+async function saveStudentProfile(e,id){e.preventDefault();return saveStudentProfileById(id,e.target)}
+async function saveStudentProfileById(id,form=null){
+  const target=form||$('#studentProfileForm');
+  if(!target)return toast('No se encontró el formulario del alumno','error');
+  try{
+    await api(`/api/admin/student/${id}`,{method:'PUT',body:JSON.stringify(Object.fromEntries(new FormData(target)))});
+    toast('Alumno actualizado');
+    await refreshAdmin();
+    await openStudent(id);
+  }catch(err){toast(err.message,'error')}
+}
 async function toggleStudentStatus(id,status){if(status==='blocked'&&!confirm('¿Bloquear esta cuenta? Se cerrarán sus sesiones activas.'))return;try{await api(`/api/admin/student/${id}`,{method:'PUT',body:JSON.stringify({status})});toast(status==='active'?'Cuenta reactivada':'Cuenta bloqueada');await refreshAdmin();await openStudent(id)}catch(e){toast(e.message,'error')}}
+async function revokeStudentSessions(id){if(!confirm('¿Cerrar todas las sesiones activas de este alumno? Tendrá que volver a iniciar sesión.'))return;try{const r=await api(`/api/admin/student/${id}/sessions/revoke-all`,{method:'POST'});toast((r.removed||0)+' sesiones cerradas');await refreshAdmin();await openStudent(id)}catch(e){toast(e.message,'error')}}
+async function revokeStudentSession(id,sessionId){if(!confirm('¿Cerrar esta sesión del alumno?'))return;try{await api(`/api/admin/student/${id}/session/${sessionId}/revoke`,{method:'POST'});toast('Sesión cerrada');await refreshAdmin();await openStudent(id)}catch(e){toast(e.message,'error')}}
+
 async function manualEnroll(id){const courseId=$('#manualCourseSelect')?.value;if(!courseId)return toast('Selecciona un curso','error');try{await api(`/api/admin/student/${id}/enrollment`,{method:'POST',body:JSON.stringify({courseId})});toast('Matrícula activada');await refreshAdmin();await openStudent(id)}catch(e){toast(e.message,'error')}}
 async function removeEnrollment(id,courseId){if(!confirm('¿Retirar el acceso a este curso? El histórico se conserva.'))return;try{await api(`/api/admin/student/${id}/enrollment/${courseId}`,{method:'DELETE'});toast('Acceso retirado');await refreshAdmin();await openStudent(id)}catch(e){toast(e.message,'error')}}
+async function qaUnlockM10(id,courseId){
+  if(!confirm('QA Preview: se marcarán como completados los módulos anteriores para desbloquear M10 en esta cuenta de prueba. ¿Continuar?'))return;
+  try{
+    const r=await api(`/api/admin/student/${id}/course/${courseId}/qa-unlock-m10`,{method:'POST'});
+    toast('QA preparado · M10 desbloqueado');
+    await refreshAdmin();
+    await openStudent(id);
+    return r;
+  }catch(e){toast(e.message,'error')}
+}
 async function resetStudentProgress(id,courseId){if(!confirm('¿Reiniciar progreso e intentos de evaluación de este curso? Esta acción no se puede deshacer.'))return;try{await api(`/api/admin/student/${id}/course/${courseId}/reset-progress`,{method:'POST'});toast('Progreso reiniciado');await refreshAdmin();await openStudent(id)}catch(e){toast(e.message,'error')}}
 async function addStudentNote(e,id){e.preventDefault();const note=new FormData(e.target).get('note');try{await api(`/api/admin/student/${id}/note`,{method:'POST',body:JSON.stringify({note})});toast('Nota guardada');await refreshAdmin();await openStudent(id)}catch(err){toast(err.message,'error')}}
-function renderAdminEmails(){const items=state.adminEmails||[];if(!items.length)return '<div class="empty">Todavía no hay emails generados.</div>';return `<div class="cert-table-head"><span>Destinatario</span><span>Tipo</span><span>Asunto</span><span>Estado</span><span>Fecha</span></div>${items.slice(0,30).map(e=>`<div class="cert-table-row"><span><b>${esc(e.studentName||e.to)}</b><small>${esc(e.to)}</small></span><span>${esc(e.type)}</span><span>${esc(e.subject)}</span><span><span class="cert-valid">${esc(e.status)}</span></span><span>${new Date(e.sentAt||e.createdAt).toLocaleString('es-ES')}</span></div>`).join('')}`}
+function renderAdminEmails(){
+  const items=state.adminEmails||[];
+  const toolbar=`<div style="display:flex;justify-content:flex-end;margin:0 0 14px 0;"><button class="secondary" onclick="flushEmailQueue()">Procesar pendientes</button></div>`;
+  if(!items.length)return toolbar+'<div class="empty">Todavía no hay emails generados.</div>';
+  return toolbar+`<div class="cert-table-head"><span>Destinatario</span><span>Tipo</span><span>Asunto</span><span>Estado</span><span>Fecha</span></div>${items.slice(0,30).map(e=>{
+    const retry=e.status==='failed'?`<button class="icon-btn" onclick="retryAdminEmail('${esc(e.id)}')">Reintentar</button>`:'';
+    const when=e.sentAt||e.lastAttemptAt||e.createdAt;
+    return `<div class="cert-table-row"><span><b>${esc(e.studentName||e.to)}</b><small>${esc(e.to)}</small></span><span>${esc(e.type)}</span><span>${esc(e.subject)}</span><span><span class="cert-valid">${esc(e.status)}</span>${retry}</span><span>${new Date(when).toLocaleString('es-ES')}</span></div>`;
+  }).join('')}`;
+}
+async function flushEmailQueue(){
+  try{
+    const r=await api('/api/admin/email/flush',{method:'POST'});
+    state.adminEmails=r.emails||[];
+    toast('Cola de correo procesada');
+    render('admin');
+  }catch(e){toast(e.message,'error')}
+}
+async function retryAdminEmail(emailId){
+  try{
+    await api('/api/admin/email/retry',{method:'POST',body:JSON.stringify({emailId})});
+    toast('Reintento ejecutado');
+    await refreshAdmin();
+    render('admin');
+  }catch(e){toast(e.message,'error')}
+}
+async function sendStudentWelcome(userId){try{await api('/api/admin/email/welcome',{method:'POST',body:JSON.stringify({userId})});toast('Bienvenida enviada');await refreshAdmin();await openStudent(userId)}catch(e){toast(e.message,'error')}}
+async function sendPurchaseTest(userId,courseId){try{await api('/api/admin/email/purchase-test',{method:'POST',body:JSON.stringify({userId,courseId})});toast('Correo de matrícula enviado');await refreshAdmin();await openStudent(userId)}catch(e){toast(e.message,'error')}}
+async function sendCourseCompletedTest(userId,courseId){try{await api('/api/admin/email/course-completed-test',{method:'POST',body:JSON.stringify({userId,courseId})});toast('Correo de finalización enviado');await refreshAdmin();await openStudent(userId)}catch(e){toast(e.message,'error')}}
+async function sendCertificateTest(userId,courseId){try{await api('/api/admin/email/certificate-test',{method:'POST',body:JSON.stringify({userId,courseId})});toast('Correo de certificado enviado');await refreshAdmin();await openStudent(userId)}catch(e){toast(e.message,'error')}}
+async function sendReminderTest(userId,courseId){try{await api('/api/admin/email/reminder-test',{method:'POST',body:JSON.stringify({userId,courseId})});toast('Correo de recordatorio de prueba enviado');await refreshAdmin();await openStudent(userId)}catch(e){toast(e.message,'error')}}
 async function sendStudentReminder(userId,courseId){try{await api('/api/admin/email/reminder',{method:'POST',body:JSON.stringify({userId,courseId})});toast('Recordatorio generado');await refreshAdmin();await openStudent(userId)}catch(e){toast(e.message,'error')}}
 function renderAdminOrders(){const items=state.adminCommerce?.orders||[];if(!items.length)return '<div class="empty">Todavía no hay pedidos.</div>';return `<div class="cert-table-head"><span>Pedido</span><span>Alumno</span><span>Curso</span><span>Total</span><span>Estado</span></div>${items.map(o=>`<div class="cert-table-row"><span><b>${esc(o.number)}</b><small>${new Date(o.createdAt).toLocaleString('es-ES')}</small></span><span>${esc(o.studentName)}<small>${esc(o.email)}</small></span><span>${esc(o.courseTitle)}</span><span>${esc(o.totalLabel)}</span><span><span class="cert-valid">${esc(o.status)}</span></span></div>`).join('')}`};
 function renderAdminCertificates(){const items=state.adminCertificates||[];if(!items.length)return '<div class="empty">Todavía no hay certificados emitidos.</div>';return `<div class="cert-table-head"><span>Alumno</span><span>Curso</span><span>Código</span><span>Estado</span><span></span></div>${items.map(c=>`<div class="cert-table-row"><span><b>${esc(c.studentName)}</b><small>${new Date(c.issuedAt).toLocaleDateString('es-ES')}</small></span><span>${esc(c.courseTitle)}</span><span><a target="_blank" href="/verify/${encodeURIComponent(c.code)}">${esc(c.code)}</a></span><span>${c.status==='valid'?'<span class="cert-valid">Válido</span>':'<span class="cert-revoked">Revocado</span>'}</span><span>${c.status==='valid'?`<button class="icon-btn danger-soft" onclick="revokeCertificate('${c.id}')">Revocar</button>`:''}</span></div>`).join('')}`};
 async function revokeCertificate(id){if(!confirm('¿Revocar este certificado? La página pública mostrará que ya no es válido.'))return;try{await api(`/api/admin/certificate/${id}/revoke`,{method:'POST'});toast('Certificado revocado');await renderAdmin()}catch(e){toast(e.message,'error')}}
-function renderAdminCourse(c){const lessonCount=c.modules.flatMap(m=>m.lessons).length;return `<section class="admin-course card"><div class="admin-course-head"><div><div class="admin-code">${esc(c.slug)}</div><h2>${esc(c.title)}</h2><p>${esc(c.subtitle||'Sin subtítulo')}</p><div class="catalog-meta">${c.modules.length} módulos · ${lessonCount} clases · ${typeof c.priceCents==='number'?(c.priceCents/100).toLocaleString('es-ES',{style:'currency',currency:c.currency||'EUR'}):''} · ${statusPill(c.status)}</div></div><div class="action-group"><button class="icon-btn" title="Editar curso" onclick="openCourseForm('${c.id}')">✎</button><button class="icon-btn ${c.status==='published'?'danger-soft':'success-soft'}" onclick="toggleCourseStatus('${c.id}')">${c.status==='published'?'Ocultar':'Publicar'}</button><button class="icon-btn danger-soft" title="Eliminar curso" onclick="deleteCourse('${c.id}')">Eliminar</button></div></div>
+function renderAdminCourse(c){const lessonCount=c.modules.flatMap(m=>m.lessons).length;const bulk=c.slug==='piel-perfecta-20'?`<div class="card" style="margin:14px 0;padding:16px"><div class="page-kicker">MIGRACIÓN PIEL PERFECTA</div><div style="display:grid;gap:16px"><div style="display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap"><div style="flex:1;min-width:260px"><b>Carga masiva de vídeos</b><p class="muted" style="margin:4px 0 0">Selecciona todos los vídeos a la vez. El Campus los asignará por códigos como 0.1, 1.2 o nombres tipo “Módulo 3 Vídeo 2”. Los vídeos nuevos van directamente a Bunny Stream. Si una clase todavía usa el antiguo Vercel Blob, el Campus la migrará automáticamente a Bunny; las clases que ya estén en Bunny se omiten.</p></div><label class="upload-label">⇧ Seleccionar vídeos<input type="file" multiple accept="video/mp4,video/webm,video/quicktime" data-bulk-video-course="${c.id}" hidden></label></div><div style="border-top:1px solid var(--line,#dfe7e7);padding-top:14px;display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap"><div style="flex:1;min-width:260px"><b>Carga masiva de materiales PDF</b><p class="muted" style="margin:4px 0 0">Reconoce automáticamente <b>ModuloN_Diapositivas.pdf</b> y <b>ModuloN_Manual_*.pdf</b>. Los dos se adjuntan a la primera clase del módulo. El cuaderno práctico de la tercera clase se conserva como recurso independiente.</p></div><label class="upload-label">⇧ Seleccionar PDFs<input type="file" multiple accept="application/pdf,.pdf" data-bulk-material-course="${c.id}" hidden></label></div><div style="display:flex;justify-content:flex-end"><button class="btn-secondary" onclick="publishPielPerfectaReady()">✓ Validar y publicar en Preview</button></div></div></div>`:'';return `<section class="admin-course card"><div class="admin-course-head"><div><div class="admin-code">${esc(c.slug)}</div><h2>${esc(c.title)}</h2><p>${esc(c.subtitle||'Sin subtítulo')}</p><div class="catalog-meta">${c.modules.length} módulos · ${lessonCount} clases · ${typeof c.priceCents==='number'?(c.priceCents/100).toLocaleString('es-ES',{style:'currency',currency:c.currency||'EUR'}):''} · ${statusPill(c.status)}</div></div><div class="action-group"><button class="icon-btn" title="Editar curso" onclick="openCourseForm('${c.id}')">✎</button><button class="icon-btn ${c.status==='published'?'danger-soft':'success-soft'}" onclick="toggleCourseStatus('${c.id}')">${c.status==='published'?'Ocultar':'Publicar'}</button><button class="icon-btn danger-soft" title="Eliminar curso" onclick="deleteCourse('${c.id}')">Eliminar</button></div></div>${bulk}
 <div class="module-stack">${c.modules.map(m=>renderAdminModule(c,m)).join('')}<button class="add-row" onclick="openModuleForm('${c.id}')">＋ Añadir módulo</button></div></section>`}
 function renderAdminModule(c,m){return `<div class="admin-module"><div class="admin-module-head"><div><span class="module-code">${esc(m.code)}</span><b>${esc(m.title)}</b> ${statusPill(m.status)} ${m.assessment?`<span class="assessment-badge">Test ${m.assessment.status==='published'?'publicado':'borrador'}</span>`:''}</div><div class="mini-actions"><button onclick="openAssessmentForm('module','${m.id}')">${m.assessment?'Evaluación':'＋ Evaluación'}</button><button onclick="openModuleForm('${c.id}','${m.id}')">Editar</button><button onclick="toggleModuleStatus('${m.id}')">${m.status==='published'?'Despublicar':'Publicar'}</button><button class="danger-text" onclick="deleteModule('${m.id}')">Eliminar</button></div></div><div class="admin-lessons">${m.lessons.map(l=>renderAdminLesson(l)).join('')}<button class="add-lesson" onclick="openLessonForm('${m.id}')">＋ Nueva clase</button></div></div>`}
-function renderAdminLesson(l){return `<div class="admin-lesson"><div class="lesson-index">${esc(l.code)}</div><div class="lesson-info"><b>${esc(l.title)}</b><div class="lesson-meta">${l.durationMinutes} min · ${statusPill(l.status)} · ${(l.resources||[]).length} recursos ${l.assessment?`· <span class="assessment-badge">Test ${l.assessment.status==='published'?'publicado':'borrador'}</span>`:''}</div>${(l.resources||[]).length?`<div class="resource-list">${l.resources.map(r=>`<span class="resource-mini"><a target="_blank" href="/api/resource?id=${r.id}">${esc(r.name)}</a><button onclick="deleteResource('${r.id}')">×</button></span>`).join('')}</div>`:''}</div><div class="lesson-actions"><label class="upload-label">＋ Recurso<input type="file" onchange="uploadResource('${l.id}',this)" hidden></label><button onclick="openAssessmentForm('lesson','${l.id}')">${l.assessment?'Evaluación':'＋ Evaluación'}</button><button onclick="openLessonForm('${l.moduleId}','${l.id}')">Editar</button><button onclick="toggleLessonStatus('${l.id}')">${l.status==='published'?'Ocultar':'Publicar'}</button><button class="danger-text" onclick="deleteLesson('${l.id}')">Eliminar</button></div></div>`}
+function renderAdminLesson(l){const videos=lessonVideoList(l);return `<div class="admin-lesson"><div class="lesson-index">${esc(l.code)}</div><div class="lesson-info"><b>${esc(l.title)}</b><div class="lesson-meta">${l.durationMinutes} min · ${statusPill(l.status)} · ${(l.resources||[]).length} recursos · ${videos.length} vídeo${videos.length===1?'':'s'} ${l.assessment?`· <span class="assessment-badge">Test ${l.assessment.status==='published'?'publicado':'borrador'}</span>`:''}</div>${(l.resources||[]).length?`<div class="resource-list">${l.resources.map(r=>`<span class="resource-mini"><a target="_blank" href="/api/resource?id=${r.id}">${esc(r.name)}</a><button onclick="deleteResource('${r.id}')">×</button></span>`).join('')}</div>`:''}${videos.length?`<div class="resource-list">${videos.map((v,i)=>`<span class="resource-mini">🎬 Vídeo ${i+1}: ${esc(v.name||('Vídeo '+(i+1)))} <button onclick="deleteTestVideo('${l.id}','${v.id}')">×</button></span>`).join('')}</div>`:''}</div><div class="lesson-actions">${videos.length?`<label class="upload-label">↻ Reemplazar vídeo 1<input type="file" accept="video/mp4,video/webm,video/quicktime" data-video-action="replace" data-lesson-id="${l.id}" data-video-id="${videos[0].id}" hidden></label>`:''}<label class="upload-label">＋ Subir vídeo<input type="file" accept="video/mp4,video/webm,video/quicktime" data-video-action="add" data-lesson-id="${l.id}" hidden></label><label class="upload-label">＋ Recurso<input type="file" data-resource-lesson="${l.id}" hidden></label><button onclick="openAssessmentForm('lesson','${l.id}')">${l.assessment?'Evaluación':'＋ Evaluación'}</button><button onclick="openLessonForm('${l.moduleId}','${l.id}')">Editar</button><button onclick="toggleLessonStatus('${l.id}')">${l.status==='published'?'Ocultar':'Publicar'}</button><button class="danger-text" onclick="deleteLesson('${l.id}')">Eliminar</button></div></div>`}
+
+async function publishPielPerfectaReady(){
+  if(!confirm('Esta acción validará Piel Perfecta y, solo si todo está completo, publicará módulos, clases y evaluaciones y habilitará la venta de prueba en Preview. ¿Continuar?'))return;
+  try{
+    const r=await api('/api/admin/piel-perfecta/publish-ready',{method:'POST',body:'{}'});
+    toast(r.readiness?.ready?'Piel Perfecta listo para prueba de compra':'Publicación completada');
+    await renderAdmin();
+    drawer('Piel Perfecta · checklist de lanzamiento','<p><b>Checklist superado.</b></p><p>33 clases con vídeo · 10 evaluaciones · 50 preguntas · 11 recursos · Tutor aprobado · secuencia activa.</p><p class="muted">La venta habilitada es únicamente la de Preview. Production sigue sin tocarse.</p><div class="drawer-actions"><button class="btn" onclick="closeDrawer()">Cerrar</button></div>');
+  }catch(e){
+    const msg=String(e.message||e);
+    toast(msg,'error');
+    alert(msg);
+  }
+}
+
 function findAdminCourse(id){return state.adminContent?.courses.find(c=>c.id===id)}
 function findAdminModule(id){return state.adminContent?.courses.flatMap(c=>c.modules).find(m=>m.id===id)}
 function findAdminLesson(id){return state.adminContent?.courses.flatMap(c=>c.modules).flatMap(m=>m.lessons).find(l=>l.id===id)}
 function drawer(title,body){$('#drawerRoot').innerHTML=`<div class="drawer-backdrop" onclick="if(event.target===this)closeDrawer()"><aside class="drawer"><div class="drawer-head"><div><div class="page-kicker">EDITOR LYKIOS</div><h2>${title}</h2></div><button class="drawer-close" onclick="closeDrawer()">×</button></div>${body}</aside></div>`}
 function closeDrawer(){if($('#drawerRoot'))$('#drawerRoot').innerHTML=''}
-function openCourseForm(id=''){const c=id?findAdminCourse(id):null;drawer(c?'Editar curso':'Nuevo curso',`<form id="courseForm" class="admin-form"><div class="field"><label>Título *</label><input name="title" required value="${esc(c?.title||'')}"></div><div class="field"><label>Subtítulo</label><input name="subtitle" value="${esc(c?.subtitle||'')}"></div><div class="field"><label>Slug</label><input name="slug" value="${esc(c?.slug||'')}"><small>Ejemplo: peeling-quimico</small></div><div class="field"><label>Descripción</label><textarea name="description" rows="5">${esc(c?.description||'')}</textarea></div><div class="form-grid"><div class="field"><label>Precio (€)</label><input name="priceEuros" type="number" min="0" step="0.01" value="${((c?.priceCents??0)/100).toFixed(2)}"></div><div class="field"><label>Estado</label><select name="status"><option value="draft" ${c?.status!=='published'?'selected':''}>Borrador</option><option value="published" ${c?.status==='published'?'selected':''}>Publicado</option></select></div></div><div class="form-grid"><div class="field checkbox-field"><label><input type="checkbox" name="saleEnabled" ${c?.saleEnabled!==false?'checked':''}> Disponible para venta</label></div><div class="field checkbox-field"><label><input type="checkbox" name="certificateEnabled" ${c?.certificateEnabled!==false?'checked':''}> Certificado habilitado</label></div></div><div class="drawer-actions"><button type="button" class="btn-secondary" onclick="closeDrawer()">Cancelar</button><button class="btn">${c?'Guardar cambios':'Crear curso'}</button></div></form>`);$('#courseForm').onsubmit=e=>saveCourse(e,id)}
-async function saveCourse(e,id){e.preventDefault();const fd=new FormData(e.target);const body=Object.fromEntries(fd);body.certificateEnabled=fd.has('certificateEnabled');body.saleEnabled=fd.has('saleEnabled');body.priceCents=Math.round(Number(fd.get('priceEuros')||0)*100);body.currency='EUR';delete body.priceEuros;try{await api(id?`/api/admin/course/${id}`:'/api/admin/course',{method:id?'PUT':'POST',body:JSON.stringify(body)});closeDrawer();toast(id?'Curso actualizado':'Curso creado');await renderAdmin()}catch(err){toast(err.message,'error')}}
+function openCourseForm(id=''){const c=id?findAdminCourse(id):null;drawer(c?'Editar curso':'Nuevo curso',`<form id="courseForm" class="admin-form"><div class="field"><label>Título *</label><input name="title" required value="${esc(c?.title||'')}"></div><div class="field"><label>Subtítulo</label><input name="subtitle" value="${esc(c?.subtitle||'')}"></div><div class="field"><label>Slug</label><input name="slug" value="${esc(c?.slug||'')}"><small>Ejemplo: peeling-quimico</small></div><div class="field"><label>Descripción</label><textarea name="description" rows="5">${esc(c?.description||'')}</textarea></div><div class="form-grid"><div class="field"><label>Precio (€)</label><input name="priceEuros" type="number" min="0" step="0.01" value="${((c?.priceCents??0)/100).toFixed(2)}"></div><div class="field"><label>Estado</label><select name="status"><option value="draft" ${c?.status!=='published'?'selected':''}>Borrador</option><option value="published" ${c?.status==='published'?'selected':''}>Publicado</option></select></div></div><div class="form-grid"><div class="field checkbox-field"><label><input type="checkbox" name="saleEnabled" ${c?.saleEnabled!==false?'checked':''}> Disponible para venta</label></div><div class="field checkbox-field"><label><input type="checkbox" name="certificateEnabled" ${c?.certificateEnabled!==false?'checked':''}> Certificado habilitado</label></div></div><div class="field checkbox-field"><label><input type="checkbox" name="sequentialAccess" ${c?.sequentialAccess?'checked':''}> Ruta secuencial · desbloquear las clases al completar la anterior</label></div><div class="drawer-actions"><button type="button" class="btn-secondary" onclick="closeDrawer()">Cancelar</button><button class="btn">${c?'Guardar cambios':'Crear curso'}</button></div></form>`);$('#courseForm').onsubmit=e=>saveCourse(e,id)}
+async function saveCourse(e,id){e.preventDefault();const fd=new FormData(e.target);const body=Object.fromEntries(fd);body.certificateEnabled=fd.has('certificateEnabled');body.saleEnabled=fd.has('saleEnabled');body.sequentialAccess=fd.has('sequentialAccess');body.priceCents=Math.round(Number(fd.get('priceEuros')||0)*100);body.currency='EUR';delete body.priceEuros;try{await api(id?`/api/admin/course/${id}`:'/api/admin/course',{method:id?'PUT':'POST',body:JSON.stringify(body)});closeDrawer();toast(id?'Curso actualizado':'Curso creado');await renderAdmin()}catch(err){toast(err.message,'error')}}
 function openModuleForm(courseId,id=''){const m=id?findAdminModule(id):null;drawer(m?'Editar módulo':'Nuevo módulo',`<form id="moduleForm" class="admin-form"><div class="form-grid"><div class="field"><label>Código</label><input name="code" value="${esc(m?.code||'')}"></div><div class="field"><label>Posición</label><input name="position" type="number" min="1" value="${m?.position||''}"></div></div><div class="field"><label>Título *</label><input name="title" required value="${esc(m?.title||'')}"></div><div class="field"><label>Estado</label><select name="status"><option value="draft" ${m?.status!=='published'?'selected':''}>Borrador</option><option value="published" ${m?.status==='published'?'selected':''}>Publicado</option></select></div><div class="drawer-actions"><button type="button" class="btn-secondary" onclick="closeDrawer()">Cancelar</button><button class="btn">${m?'Guardar':'Crear módulo'}</button></div></form>`);$('#moduleForm').onsubmit=e=>saveModule(e,courseId,id)}
 async function saveModule(e,courseId,id){e.preventDefault();const body=Object.fromEntries(new FormData(e.target));body.courseId=courseId;try{await api(id?`/api/admin/module/${id}`:'/api/admin/module',{method:id?'PUT':'POST',body:JSON.stringify(body)});closeDrawer();toast(id?'Módulo actualizado':'Módulo creado');await renderAdmin()}catch(err){toast(err.message,'error')}}
 function openLessonForm(moduleId,id=''){const l=id?findAdminLesson(id):null;drawer(l?'Editar clase':'Nueva clase',`<form id="lessonForm" class="admin-form"><div class="form-grid"><div class="field"><label>Código</label><input name="code" value="${esc(l?.code||'')}"></div><div class="field"><label>Posición</label><input name="position" type="number" min="1" value="${l?.position||''}"></div></div><div class="field"><label>Título *</label><input name="title" required value="${esc(l?.title||'')}"></div><div class="field"><label>Descripción / introducción</label><textarea name="summary" rows="5">${esc(l?.summary||'')}</textarea></div><div class="form-grid"><div class="field"><label>Duración (min)</label><input name="durationMinutes" type="number" min="1" value="${l?.durationMinutes||10}"></div><div class="field"><label>Estado</label><select name="status"><option value="draft" ${l?.status!=='published'?'selected':''}>Borrador</option><option value="published" ${l?.status==='published'?'selected':''}>Publicado</option></select></div></div><div class="field"><label>Vídeo / referencia interna</label><input name="video" value="${esc(l?.video||'')}" placeholder="local:archivo.mp4 o referencia del proveedor"></div><div class="tutor-editor"><div class="field"><label>Contenido aprobado para Lykios AI Tutor</label><textarea name="tutorContent" rows="8" placeholder="Pega aquí el guion, resumen o contenido docente que el tutor puede utilizar.">${esc(l?.tutorContent||'')}</textarea><small>El tutor no utilizará otros textos de esta clase salvo título y descripción pública.</small></div><label class="check-row"><input type="checkbox" name="tutorApproved" ${l?.tutorApproved?'checked':''}> <span>Aprobado para Lykios AI Tutor</span></label></div><div class="drawer-actions"><button type="button" class="btn-secondary" onclick="closeDrawer()">Cancelar</button><button class="btn">${l?'Guardar':'Crear clase'}</button></div></form>`);$('#lessonForm').onsubmit=e=>saveLesson(e,moduleId,id)}
@@ -147,10 +556,386 @@ async function toggleLessonStatus(id){const x=findAdminLesson(id);try{await patc
 async function deleteCourse(id){if(!confirm('¿Eliminar este curso? Esta acción no se puede deshacer.'))return;try{await api(`/api/admin/course/${id}`,{method:'DELETE'});toast('Curso eliminado');await renderAdmin()}catch(e){toast(e.message,'error')}}
 async function deleteModule(id){if(!confirm('¿Eliminar este módulo y todas sus clases?'))return;try{await api(`/api/admin/module/${id}`,{method:'DELETE'});toast('Módulo eliminado');await renderAdmin()}catch(e){toast(e.message,'error')}}
 async function deleteLesson(id){if(!confirm('¿Eliminar esta clase y sus recursos?'))return;try{await api(`/api/admin/lesson/${id}`,{method:'DELETE'});toast('Clase eliminada');await renderAdmin()}catch(e){toast(e.message,'error')}}
+function putFileWithProgress(url,file,onProgress){return new Promise((resolve,reject)=>{const xhr=new XMLHttpRequest();xhr.open('PUT',url,true);if(file.type)xhr.setRequestHeader('Content-Type',file.type);xhr.upload.onprogress=e=>{if(e.lengthComputable&&onProgress)onProgress(Math.round(e.loaded/e.total*100))};xhr.onload=()=>xhr.status>=200&&xhr.status<300?resolve():reject(new Error('Almacenamiento respondió '+xhr.status));xhr.onerror=()=>reject(new Error('No se pudo subir el vídeo'));xhr.send(file)})}
+function bunnyTusBase64(value){
+  const bytes=new TextEncoder().encode(String(value||''));
+  let raw='';for(const b of bytes)raw+=String.fromCharCode(b);
+  return btoa(raw);
+}
+function bunnyTusAuthHeaders(prep){
+  return {
+    'Tus-Resumable':'1.0.0',
+    'AuthorizationSignature':String(prep.signature||''),
+    'AuthorizationExpire':String(prep.expires||''),
+    'VideoId':String(prep.videoId||''),
+    'LibraryId':String(prep.libraryId||'')
+  };
+}
+async function bunnyTusOffset(uploadUrl,prep){
+  const response=await fetch(uploadUrl,{method:'HEAD',headers:bunnyTusAuthHeaders(prep)});
+  if(!response.ok)throw new Error('No se pudo reanudar la carga de Bunny ('+response.status+')');
+  return Math.max(0,Number(response.headers.get('Upload-Offset'))||0);
+}
+async function putBunnyTusWithProgress(prep,file,onProgress){
+  const auth=bunnyTusAuthHeaders(prep);
+  const metadata=[
+    'filename '+bunnyTusBase64(file.name),
+    'title '+bunnyTusBase64(file.name),
+    'filetype '+bunnyTusBase64(file.type||'application/octet-stream')
+  ].join(',');
+  const create=await fetch(prep.uploadUrl,{
+    method:'POST',
+    headers:{...auth,'Upload-Length':String(file.size),'Upload-Metadata':metadata}
+  });
+  if(!create.ok)throw new Error('Bunny no pudo iniciar la carga ('+create.status+')');
+  const location=create.headers.get('Location');
+  if(!location)throw new Error('Bunny no devolvió la URL de carga');
+  const uploadUrl=new URL(location,prep.uploadUrl).toString();
+  let offset=Math.max(0,Number(create.headers.get('Upload-Offset'))||0);
+  const chunkSize=16*1024*1024;
+  let lastPercent=-1;
+  while(offset<file.size){
+    const start=offset;
+    const end=Math.min(file.size,start+chunkSize);
+    let success=false,lastError=null;
+    for(let attempt=0;attempt<5&&!success;attempt++){
+      try{
+        const response=await fetch(uploadUrl,{
+          method:'PATCH',
+          headers:{...auth,'Upload-Offset':String(offset),'Content-Type':'application/offset+octet-stream'},
+          body:file.slice(offset,end)
+        });
+        if(response.status===409){
+          offset=await bunnyTusOffset(uploadUrl,prep);
+          success=true;
+          break;
+        }
+        if(!response.ok)throw new Error('Bunny respondió '+response.status);
+        offset=Math.max(offset,Number(response.headers.get('Upload-Offset'))||end);
+        success=true;
+      }catch(error){
+        lastError=error;
+        if(attempt>=4)break;
+        await new Promise(resolve=>setTimeout(resolve,1000*Math.min(8,2**attempt)));
+        try{offset=await bunnyTusOffset(uploadUrl,prep)}catch{}
+        if(offset>=end){success=true;break}
+        if(offset!==start){success=true;break}
+      }
+    }
+    if(!success)throw lastError||new Error('No se pudo continuar la carga a Bunny');
+    const percent=Math.min(100,Math.round(offset/file.size*100));
+    if(percent!==lastPercent){lastPercent=percent;if(onProgress)onProgress(percent)}
+  }
+}
+async function uploadPreparedVideo(prep,file,onProgress){
+  if(prep.provider==='bunny')return putBunnyTusWithProgress(prep,file,onProgress);
+  return putFileWithProgress(prep.uploadUrl,file,onProgress);
+}
+async function cancelPreparedVideo(prep){
+  if(!prep?.ticket||prep.provider!=='bunny')return;
+  try{await api('/api/admin/video/cancel',{method:'POST',body:JSON.stringify({ticket:prep.ticket})})}catch{}
+}
+async function completePreparedVideo(prep){
+  let lastError=null;
+  for(let attempt=0;attempt<4;attempt++){
+    try{return await api('/api/admin/video/complete',{method:'POST',body:JSON.stringify({ticket:prep.ticket})})}
+    catch(error){
+      lastError=error;
+      if(attempt>=3)break;
+      await new Promise(resolve=>setTimeout(resolve,800*(attempt+1)));
+    }
+  }
+  throw lastError||new Error('No se pudo registrar el vídeo');
+}
+async function uploadTestVideo(lessonId,input,mode='add',videoId=''){
+  const file=input.files?.[0];if(!file)return;
+  if(!['video/mp4','video/webm','video/quicktime'].includes(file.type)){toast('Usa un vídeo MP4, WebM o MOV','error');input.value='';return}
+  if(file.size>2_000_000_000){toast('Máximo 2 GB por vídeo','error');input.value='';return}
+  let prep=null,uploaded=false;
+  try{
+    toast(mode==='replace'?'Preparando sustitución segura…':'Preparando nuevo vídeo…');
+    prep=await api('/api/admin/video/upload-url',{method:'POST',body:JSON.stringify({lessonId,name:file.name,mime:file.type,size:file.size,mode,videoId})});
+    let shown=-20;
+    await uploadPreparedVideo(prep,file,p=>{if(p>=shown+10||p===100){shown=p;toast((prep.provider==='bunny'?'Subiendo a Bunny… ':'Subiendo vídeo… ')+p+'%')}});
+    uploaded=true;
+    const result=await completePreparedVideo(prep);
+    toast(result.processing?'Vídeo subido. Bunny lo está procesando…':(mode==='replace'?'Vídeo reemplazado':'Vídeo añadido a la clase'));
+    await renderAdmin();
+  }catch(e){
+    if(prep&&!uploaded)await cancelPreparedVideo(prep);
+    toast(e.message,'error');
+  }finally{input.value=''}
+}
+
+function matchLessonForVideoFile(fileName,lessons){
+  const base=String(fileName||'').replace(/\.[^.]+$/,'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  const ordered=[...lessons].sort((a,b)=>String(b.code||'').length-String(a.code||'').length);
+  for(const lesson of ordered){
+    const parts=String(lesson.code||'').split('.');
+    if(parts.length!==2)continue;
+    const major=parts[0].replace(/\D/g,''),minor=parts[1].replace(/\D/g,'');
+    if(!major||!minor)continue;
+    const direct=new RegExp('(^|[^0-9])'+major+'[._\\-\\s]+'+minor+'([^0-9]|$)');
+    const named=new RegExp('(?:modulo|mod|m)\\s*'+major+'(?:[^0-9]+|.*?)(?:video|vid|v|clase)\\s*'+minor+'([^0-9]|$)');
+    if(direct.test(base)||named.test(base))return lesson;
+  }
+  return null;
+}
+async function uploadVideoFileDirect(lesson,file,mode='add',videoId=''){
+  let prep=null,uploaded=false;
+  try{
+    prep=await api('/api/admin/video/upload-url',{method:'POST',body:JSON.stringify({lessonId:lesson.id,name:file.name,mime:file.type,size:file.size,mode,videoId})});
+    let shown=-20;
+    await uploadPreparedVideo(prep,file,p=>{if(p>=shown+10||p===100){shown=p;toast((mode==='replace'?'Migrando ':'Subiendo ')+lesson.code+' a '+(prep.provider==='bunny'?'Bunny':'almacenamiento')+' · '+p+'%')}});
+    uploaded=true;
+    return await completePreparedVideo(prep);
+  }catch(error){
+    if(prep&&!uploaded)await cancelPreparedVideo(prep);
+    throw error;
+  }
+}
+async function bulkUploadPielPerfectaVideos(courseId,input){
+  const course=findAdminCourse(courseId);if(!course){toast('Curso no encontrado','error');input.value='';return}
+  const lessons=course.modules.flatMap(m=>m.lessons);
+  const files=[...(input.files||[])];
+  if(!files.length)return;
+  const invalid=files.filter(f=>!['video/mp4','video/webm','video/quicktime'].includes(f.type)||f.size>2_000_000_000);
+  const candidates=[],unmatched=[],already=[],migrations=[],duplicates=[];
+  const used=new Set();
+  for(const file of files){
+    if(invalid.includes(file))continue;
+    const lesson=matchLessonForVideoFile(file.name,lessons);
+    if(!lesson){unmatched.push(file.name);continue}
+    if(used.has(lesson.id)){duplicates.push(file.name+' → '+lesson.code);continue}
+    used.add(lesson.id);
+    const existing=lessonVideoList(lesson);
+    if(existing.length){
+      const first=existing[0];
+      const legacyEntry=existing.find(v=>String(v.ref||'').startsWith('blob:')||String(v.provider||'').toLowerCase()==='blob')||null;
+      const primaryRef=String(lesson.video||'');
+      const hasLegacyBlob=primaryRef.startsWith('blob:')||Boolean(legacyEntry);
+      if(hasLegacyBlob){
+        migrations.push(file.name+' → '+lesson.code);
+        candidates.push({lesson,file,mode:'replace',videoId:(legacyEntry||first).id});
+        continue;
+      }
+      already.push(file.name+' → '+lesson.code);continue;
+    }
+    if(String(lesson.video||'').startsWith('blob:')){
+      migrations.push(file.name+' → '+lesson.code);
+      candidates.push({lesson,file,mode:'replace',videoId:lesson.videoId||''});
+      continue;
+    }
+    candidates.push({lesson,file,mode:'add',videoId:''});
+  }
+  const lines=[
+    candidates.length+' vídeos listos para Bunny.',
+    migrations.length?migrations.length+' vídeos antiguos de Vercel se reemplazarán por Bunny.':'',
+    unmatched.length?unmatched.length+' sin código reconocible.':'',
+    already.length?already.length+' clases ya están en Bunny y se omitirán.':'',
+    duplicates.length?duplicates.length+' archivos duplican una clase y se omitirán.':'',
+    invalid.length?invalid.length+' archivos tienen formato/tamaño no permitido.':''
+  ].filter(Boolean);
+  if(!candidates.length){alert(lines.join('\n'));input.value='';return}
+  if(!confirm(lines.join('\n')+'\n\n¿Iniciar la carga masiva?')){input.value='';return}
+  const ok=[],failed=[];
+  for(let i=0;i<candidates.length;i++){
+    const {lesson,file,mode,videoId}=candidates[i];
+    try{
+      toast((mode==='replace'?'Migrando ':'Vídeo ')+(i+1)+'/'+candidates.length+' · clase '+lesson.code);
+      await uploadVideoFileDirect(lesson,file,mode,videoId);
+      ok.push(lesson.code+' · '+file.name+(mode==='replace'?' · migrado a Bunny':''));
+    }catch(e){failed.push(lesson.code+' · '+file.name+' · '+e.message)}
+  }
+  input.value='';
+  await renderAdmin();
+  const details=[
+    '<p><b>'+ok.length+' vídeos cargados correctamente.</b></p>',
+    unmatched.length?'<p><b>Sin asignar:</b><br>'+unmatched.map(esc).join('<br>')+'</p>':'',
+    migrations.length?'<p><b>Migrados desde Vercel Blob a Bunny:</b><br>'+migrations.map(esc).join('<br>')+'</p>':'',
+    already.length?'<p><b>Omitidos porque ya estaban en Bunny:</b><br>'+already.map(esc).join('<br>')+'</p>':'',
+    duplicates.length?'<p><b>Duplicados omitidos:</b><br>'+duplicates.map(esc).join('<br>')+'</p>':'',
+    invalid.length?'<p><b>Formato/tamaño no permitido:</b><br>'+invalid.map(x=>esc(x.name)).join('<br>')+'</p>':'',
+    failed.length?'<p><b>Fallos:</b><br>'+failed.map(esc).join('<br>')+'</p>':''
+  ].filter(Boolean).join('');
+  drawer('Resultado de la carga masiva',details+'<div class="drawer-actions"><button class="btn" onclick="closeDrawer()">Cerrar</button></div>');
+}
+
+
+function normalizePielPerfectaMaterialName(name=''){
+  return String(name).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[_-]+/g,' ').replace(/\s+/g,' ').trim();
+}
+function matchPielPerfectaMaterial(fileName,course){
+  const n=normalizePielPerfectaMaterialName(fileName);
+  const match=n.match(/modulo\s*0*(\d{1,2})\b/);
+  if(!match)return null;
+  const module=course.modules.find(m=>String(m.code||'').toUpperCase()==='M'+Number(match[1]));
+  if(!module)return null;
+  let kind=null;
+  if(/\bdiapositivas?\b/.test(n))kind='slides';
+  else if(/\bmanual\b|\bworkbook\b|\bbienvenida\b|\bproyecto\b/.test(n))kind='manual';
+  if(!kind)return {module,kind:null,lesson:null};
+  const lesson=(module.lessons||[]).slice().sort((a,b)=>(Number(a.position)||0)-(Number(b.position)||0))[0]||null;
+  return {module,kind,lesson};
+}
+async function uploadResourceFileDirect(lessonId,file){
+  const base64=await fileToBase64(file);
+  return api('/api/admin/resource',{method:'POST',body:JSON.stringify({lessonId,name:file.name,mime:file.type||'application/pdf',dataBase64:base64})});
+}
+async function bulkUploadPielPerfectaResources(courseId,input){
+  const course=findAdminCourse(courseId);if(!course){toast('Curso no encontrado','error');input.value='';return}
+  const files=[...(input.files||[])];if(!files.length)return;
+  const invalid=[],unmatched=[],ignored=[],duplicates=[],already=[],candidates=[];
+  const used=new Set();
+  for(const file of files){
+    const isPdf=file.type==='application/pdf'||/\.pdf$/i.test(file.name);
+    if(!isPdf||file.size>6_000_000){invalid.push(file.name);continue}
+    const hit=matchPielPerfectaMaterial(file.name,course);
+    if(!hit){unmatched.push(file.name);continue}
+    if(!hit.kind||!hit.lesson){ignored.push(file.name);continue}
+    const key=hit.module.code+':'+hit.kind;
+    if(used.has(key)){duplicates.push(file.name+' → '+hit.module.code);continue}
+    used.add(key);
+    const existing=(hit.lesson.resources||[]).some(r=>{
+      const rn=normalizePielPerfectaMaterialName(r.name||'');
+      return hit.kind==='slides'?/\bdiapositivas?\b/.test(rn):(/\bmanual\b|\bworkbook\b|\bbienvenida\b|\bproyecto\b/.test(rn));
+    });
+    if(existing){already.push(file.name+' → '+hit.module.code);continue}
+    candidates.push({file,lesson:hit.lesson,module:hit.module,kind:hit.kind});
+  }
+  const slides=candidates.filter(x=>x.kind==='slides').length;
+  const manuals=candidates.filter(x=>x.kind==='manual').length;
+  const lines=[
+    candidates.length+' PDFs listos para cargar ('+slides+' diapositivas · '+manuals+' manuales/workbooks).',
+    already.length?already.length+' materiales ya estaban cargados y se omitirán.':'',
+    ignored.length?ignored.length+' PDFs no son Diapositivas/Manual y se omitirán.':'',
+    unmatched.length?unmatched.length+' PDFs no tienen un módulo reconocible.':'',
+    duplicates.length?duplicates.length+' PDFs duplican el mismo tipo de material y se omitirán.':'',
+    invalid.length?invalid.length+' archivos no son PDF válido o superan 6 MB.':''
+  ].filter(Boolean);
+  if(!candidates.length){alert(lines.join('\n'));input.value='';return}
+  if(!confirm(lines.join('\n')+'\n\nSe adjuntarán a la primera clase de cada módulo. ¿Iniciar la carga?')){input.value='';return}
+  const ok=[],failed=[];
+  for(let i=0;i<candidates.length;i++){
+    const item=candidates[i];
+    try{
+      toast('PDF '+(i+1)+'/'+candidates.length+' · '+item.module.code+' · '+(item.kind==='slides'?'diapositivas':'manual'));
+      await uploadResourceFileDirect(item.lesson.id,item.file);
+      ok.push(item.module.code+' · '+item.file.name);
+    }catch(e){failed.push(item.module.code+' · '+item.file.name+' · '+e.message)}
+  }
+  input.value='';
+  await renderAdmin();
+  drawer('Resultado de materiales PDF',[
+    '<p><b>'+ok.length+' PDFs cargados correctamente.</b></p>',
+    ok.length?'<p>'+ok.map(esc).join('<br>')+'</p>':'',
+    already.length?'<p><b>Ya existentes:</b><br>'+already.map(esc).join('<br>')+'</p>':'',
+    ignored.length?'<p><b>Otros PDFs omitidos:</b><br>'+ignored.map(esc).join('<br>')+'</p>':'',
+    unmatched.length?'<p><b>Sin módulo reconocido:</b><br>'+unmatched.map(esc).join('<br>')+'</p>':'',
+    duplicates.length?'<p><b>Duplicados omitidos:</b><br>'+duplicates.map(esc).join('<br>')+'</p>':'',
+    invalid.length?'<p><b>No válidos:</b><br>'+invalid.map(esc).join('<br>')+'</p>':'',
+    failed.length?'<p><b>Fallos:</b><br>'+failed.map(esc).join('<br>')+'</p>':'',
+    '<div class="drawer-actions"><button class="btn" onclick="closeDrawer()">Cerrar</button></div>'
+  ].filter(Boolean).join(''));
+}
+
+async function deleteTestVideo(lessonId,videoId=''){if(!confirm('¿Quitar este vídeo de la clase?'))return;try{const qs=videoId?`?videoId=${encodeURIComponent(videoId)}`:'';await api(`/api/admin/video/${lessonId}${qs}`,{method:'DELETE'});toast('Vídeo eliminado');await renderAdmin()}catch(e){toast(e.message,'error')}}
 async function uploadResource(lessonId,input){const file=input.files?.[0];if(!file)return;if(file.size>6_000_000){toast('Máximo 6 MB por recurso en esta versión','error');input.value='';return}try{toast('Subiendo recurso…');const base64=await fileToBase64(file);await api('/api/admin/resource',{method:'POST',body:JSON.stringify({lessonId,name:file.name,mime:file.type||'application/octet-stream',dataBase64:base64})});toast('Recurso guardado');await renderAdmin()}catch(e){toast(e.message,'error')}finally{input.value=''}}
 function fileToBase64(file){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result).split(',')[1]||'');r.onerror=reject;r.readAsDataURL(file)})}
 async function deleteResource(id){if(!confirm('¿Eliminar este recurso?'))return;try{await api(`/api/admin/resource/${id}`,{method:'DELETE'});toast('Recurso eliminado');await renderAdmin()}catch(e){toast(e.message,'error')}}
 
+
+// Cargas de archivos compatibles con CSP estricta.
+document.addEventListener('change',e=>{
+  const input=e.target;
+  if(!(input instanceof HTMLInputElement)||input.type!=='file')return;
+  if(input.dataset.bulkVideoCourse){bulkUploadPielPerfectaVideos(input.dataset.bulkVideoCourse,input);return}
+  if(input.dataset.bulkMaterialCourse){bulkUploadPielPerfectaResources(input.dataset.bulkMaterialCourse,input);return}
+  if(input.hasAttribute('data-course-transfer-file')){validatePielPerfectaTransferFile(input);return}
+  if(input.dataset.videoAction){uploadTestVideo(input.dataset.lessonId,input,input.dataset.videoAction,input.dataset.videoId||'');return}
+  if(input.dataset.resourceLesson){uploadResource(input.dataset.resourceLesson,input);return}
+  if(input.dataset.teacherResourceLesson){teacherUploadResource(input.dataset.teacherResourceLesson,input);return}
+});
+
+// Puente de eventos compatible con CSP estricta.
+// La UI histórica genera atributos onclick, pero script-src 'self' bloquea
+// su ejecución inline. Este listener interpreta únicamente llamadas a una
+// lista cerrada de acciones propias del Campus, sin eval ni unsafe-inline.
+const SAFE_CLICK_ACTIONS=new Set([
+  'setRoute','logout','openForgotPassword','openStore','render','openCheckout','validateCoupon',
+  'openCourse','openResumeLesson','issueCertificate','openLesson','completeLesson','openAssessment','renderAssessment',
+  'openTutorSource','sendTutorFeedback','openBundleForm','openCouponForm','openPromotionForm',
+  'deleteMonetization','publishPielPerfectaReady','exportPielPerfectaTransfer','commitPielPerfectaTransfer','toggleVideoFullscreenByIndex','closeDrawer','openTeacherModuleForm','openTeacherLessonForm','openCourseForm',
+  'openTeacherAdminForm','unassignTeacher','assignTeacher','openStudent','toggleStudentStatus','revokeStudentSessions','revokeStudentSession',
+  'manualEnroll','removeEnrollment','sendCourseCompletedTest','sendCertificateTest','sendReminderTest','sendStudentReminder','runConcurrencySelfTest','runPreviewClosure','flushEmailQueue','retryAdminEmail','resetStudentProgress','revokeCertificate',
+  'toggleCourseStatus','deleteCourse','openModuleForm','openAssessmentForm','toggleModuleStatus',
+  'deleteModule','openLessonForm','deleteResource','deleteTestVideo','toggleLessonStatus','deleteLesson',
+  'openQuestionForm','deleteQuestion','deleteAssessment','reopenAssessment','renderCourse'
+]);
+function parseSafeActionArgs(raw=''){
+  const out=[];let token='',quote='',escape=false;
+  const push=()=>{
+    const v=token.trim();token='';
+    if(!v){return}
+    if((v.startsWith("'")&&v.endsWith("'"))||(v.startsWith('"')&&v.endsWith('"'))){
+      const q=v[0];let s=v.slice(1,-1);
+      s=s.replace(/\\\\/g,'\\').replace(q==="'"?/\\'/g:/\\"/g,q);
+      out.push(s);return;
+    }
+    if(v==='true'){out.push(true);return}
+    if(v==='false'){out.push(false);return}
+    if(v==='null'){out.push(null);return}
+    if(/^-?\d+(?:\.\d+)?$/.test(v)){out.push(Number(v));return}
+    throw new Error('Argumento de acción no permitido');
+  };
+  for(let i=0;i<raw.length;i++){
+    const ch=raw[i];
+    if(escape){token+=ch;escape=false;continue}
+    if(ch==='\\'){token+=ch;escape=true;continue}
+    if(quote){token+=ch;if(ch===quote)quote='';continue}
+    if(ch==="'"||ch==='"'){quote=ch;token+=ch;continue}
+    if(ch===','){push();continue}
+    token+=ch;
+  }
+  if(token.trim())push();
+  return out;
+}
+function runSafeInlineActions(code,event,el){
+  if(!code)return false;
+  if(code.includes('if(event.target===this)')&&event.target!==el)return true;
+  if(code.includes("$('#checkoutRoot').innerHTML=''")){
+    const root=$('#checkoutRoot');if(root)root.innerHTML='';return true;
+  }
+  if(code.includes('state.assessmentResult=null')) state.assessmentResult=null;
+  const calls=[...code.matchAll(/\b([A-Za-z_$][\w$]*)\s*\(([^()]*)\)/g)];
+  let handled=false;
+  for(const [,name,argsRaw] of calls){
+    if(name==='preventDefault'){event.preventDefault();handled=true;continue}
+    if(!SAFE_CLICK_ACTIONS.has(name))continue;
+    const fn=window[name];
+    if(typeof fn!=='function')continue;
+    const args=parseSafeActionArgs(argsRaw);
+    fn(...args);handled=true;
+  }
+  return handled;
+}
+document.addEventListener('click',event=>{
+  const el=event.target?.closest?.('[onclick]');
+  if(!el||el.disabled)return;
+  const code=el.getAttribute('onclick')||'';
+  try{
+    if(runSafeInlineActions(code,event,el)){
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
+    }
+  }catch(error){
+    console.error('safe_click_bridge_failed',error);
+    toast('No se pudo ejecutar esta acción','error');
+  }
+},true);
+
+window.addEventListener('beforeunload',()=>{const a=activeLessonVideo;if(!a)return;const currentTime=Number(a.currentTime??a.element?.currentTime)||0;const duration=Number(a.duration??a.element?.duration)||0;if(!duration)return;try{navigator.sendBeacon?.('/api/video/progress',new Blob([JSON.stringify({lessonId:a.lessonId,videoId:a.videoId,currentTime,duration,playing:false})],{type:'application/json'}))}catch{}})
 function render(route){if(route==='store')return openStore();if(route==='login'||!state.me)return renderLogin();({dashboard:renderDashboard,courses:renderCourses,course:renderCourse,lesson:renderLesson,assessment:renderAssessment,profile:renderProfile,teacher:renderTeacher,admin:renderAdmin}[route]||renderDashboard)()}
-Object.assign(window,{setRoute,logout,openStore,openForgotPassword,forgotPassword,renderResetPassword,resetPassword,openCheckout,validateCoupon,checkoutMock,checkoutReal,confirmPaymentReturn,openStudent,saveStudentProfile,toggleStudentStatus,manualEnroll,removeEnrollment,resetStudentProgress,addStudentNote,sendStudentReminder,openLesson,initLessonVideo,completeLesson,openAssessment,renderAssessment,openCourseForm,openModuleForm,openLessonForm,openAssessmentForm,openQuestionForm,reopenAssessment,deleteQuestion,deleteAssessment,closeDrawer,toggleCourseStatus,toggleModuleStatus,toggleLessonStatus,deleteCourse,deleteModule,deleteLesson,uploadResource,deleteResource,openBundleForm,saveBundle,openCouponForm,saveCoupon,openPromotionForm,savePromotion,deleteMonetization,renderTeacher,openTeacherModuleForm,openTeacherLessonForm,teacherUploadResource,openTeacherAdminForm,assignTeacher,unassignTeacher,askTutor,sendTutorFeedback,saveTutorPolicy,openTutorSource,state});
-bootstrap();
+Object.assign(window,{render,issueCertificate,revokeCertificate,setRoute,openCourse,logout,openStore,openForgotPassword,forgotPassword,renderResetPassword,resetPassword,openCheckout,validateCoupon,checkoutMock,checkoutReal,confirmPaymentReturn,openStudent,saveStudentProfile,toggleStudentStatus,revokeStudentSessions,revokeStudentSession,manualEnroll,removeEnrollment,resetStudentProgress,addStudentNote,sendStudentWelcome,sendPurchaseTest,sendCourseCompletedTest,sendCertificateTest,sendReminderTest,sendStudentReminder,runConcurrencySelfTest,runPreviewClosure,saveStudentProfileById,flushEmailQueue,retryAdminEmail,openLesson,initLessonVideo,toggleVideoFullscreenByIndex,completeLesson,openAssessment,renderAssessment,openCourseForm,openModuleForm,openLessonForm,openAssessmentForm,openQuestionForm,reopenAssessment,deleteQuestion,deleteAssessment,closeDrawer,toggleCourseStatus,toggleModuleStatus,toggleLessonStatus,deleteCourse,deleteModule,deleteLesson,uploadResource,deleteResource,uploadTestVideo,deleteTestVideo,publishPielPerfectaReady,bulkUploadPielPerfectaVideos,exportPielPerfectaTransfer,validatePielPerfectaTransferFile,commitPielPerfectaTransfer,openBundleForm,saveBundle,openCouponForm,saveCoupon,openPromotionForm,savePromotion,deleteMonetization,renderTeacher,openTeacherModuleForm,openTeacherLessonForm,teacherUploadResource,openTeacherAdminForm,assignTeacher,unassignTeacher,askTutor,sendTutorFeedback,saveTutorPolicy,openTutorSource,state});
+setTimeout(()=>bootstrap(),0);

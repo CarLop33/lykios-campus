@@ -1,14 +1,10 @@
-const requiredCommon = ['DATABASE_URL','SESSION_SECRET','VIDEO_SIGNING_SECRET'];
-const requiredPreview = [...requiredCommon];
-const requiredProduction = [...requiredCommon,'STRIPE_SECRET_KEY','STRIPE_WEBHOOK_SECRET'];
-const env = process.env.VERCEL_ENV || 'development';
-const req = env === 'production' ? requiredProduction : (env === 'preview' ? requiredPreview : []);
-const missing = req.filter(k => !process.env[k]);
+import { inspectEnvironment } from './env-requirements.mjs';
+
+const target=process.env.VERCEL_ENV||'development';
+const result=inspectEnvironment(target);
 console.log(JSON.stringify({
-  app: 'lykios-campus',
-  vercelEnv: env,
-  required: req,
-  missing,
-  status: missing.length ? 'NO_GO' : 'GO'
-}, null, 2));
-if (missing.length) process.exit(1);
+  app:'lykios-campus',
+  vercelEnv:target,
+  ...result
+},null,2));
+if(result.status!=='GO') process.exit(1);
