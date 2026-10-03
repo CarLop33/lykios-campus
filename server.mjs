@@ -2350,6 +2350,28 @@ function validateCoupon(db,code,{user=null,targetType,targetId,subtotalCents=0}=
   if(Number(c.minSubtotalCents)>0&&subtotalCents<Number(c.minSubtotalCents))return {error:'No se alcanza el importe mínimo del cupón',status:400};
   return {coupon:c,discountCents:applyDiscount(subtotalCents,c.discountType,c.value)};
 }
+const CHECKOUT_CONSENT_VERSION='2026-10-03';
+function checkoutConsentAccepted(value){
+  if(value===true)return true;
+  return ['yes','on','true','1'].includes(String(value||'').trim().toLowerCase());
+}
+function checkoutConsentError(body){
+  if(!checkoutConsentAccepted(body?.termsPrivacyAccepted))return 'Debes aceptar las Condiciones de contratación y la Política de privacidad';
+  if(!checkoutConsentAccepted(body?.digitalContentConsent))return 'Debes autorizar el inicio inmediato del contenido digital para completar la matrícula';
+  return null;
+}
+function checkoutConsentRecord(){
+  return {
+    acceptedAt:now(),
+    version:CHECKOUT_CONSENT_VERSION,
+    termsAccepted:true,
+    privacyAccepted:true,
+    immediateDigitalAccessRequested:true,
+    withdrawalAcknowledgement:true,
+    termsUrl:'https://www.lykiosacademy.com/condiciones',
+    privacyUrl:'https://www.lykiosacademy.com/privacidad'
+  };
+}
 function checkoutMock(db,body,{suppressEmails=false}={}){
   const itemType=body.itemType==='bundle'?'bundle':'course';
   const target=itemType==='bundle'
@@ -2360,6 +2382,9 @@ function checkoutMock(db,body,{suppressEmails=false}={}){
     const readiness=courseSaleReadiness(db,target);
     if(!readiness.ready)return {error:'Curso todavía no disponible para compra: '+readiness.reasons.join(' · '),status:409};
   }
+  const consentError=checkoutConsentError(body);
+  if(consentError)return {error:consentError,status:400};
+  const checkoutConsent=checkoutConsentRecord();
   const email=cleanText(body.email,220).toLowerCase(); const firstName=cleanText(body.firstName,120); const lastName=cleanText(body.lastName,120); const password=String(body.password||'');
   if(!email||!email.includes('@')||!firstName) return {error:'Completa nombre y email',status:400};
   let user=db.users.find(u=>u.email.toLowerCase()===email);
@@ -2378,7 +2403,7 @@ function checkoutMock(db,body,{suppressEmails=false}={}){
   if(couponResult.error)return couponResult;
   const couponDiscount=couponResult.discountCents||0;
   const total=Math.max(0,pr.finalCents-couponDiscount);
-  const order={id:newId(),number:`ORD-${new Date().getFullYear()}-${String(db.orders.length+1).padStart(5,'0')}`,userId:user.id,courseId:itemType==='course'?target.id:null,bundleId:itemType==='bundle'?target.id:null,itemType,itemTitle:target.title,lineCourseIds:validCourses.map(c=>c.id),subtotalCents:pr.baseCents,promotionDiscountCents:pr.discountCents,couponDiscountCents:couponDiscount,discountCents:pr.discountCents+couponDiscount,couponCode:couponResult.coupon?.code||null,totalCents:total,currency:target.currency||'EUR',status:'paid',provider:'mock',createdAt:now(),paidAt:now()};
+  const order={id:newId(),number:`ORD-${new Date().getFullYear()}-${String(db.orders.length+1).padStart(5,'0')}`,userId:user.id,courseId:itemType==='course'?target.id:null,bundleId:itemType==='bundle'?target.id:null,itemType,itemTitle:target.title,lineCourseIds:validCourses.map(c=>c.id),subtotalCents:pr.baseCents,promotionDiscountCents:pr.discountCents,couponDiscountCents:couponDiscount,discountCents:pr.discountCents+couponDiscount,couponCode:couponResult.coupon?.code||null,totalCents:total,currency:target.currency||'EUR',status:'paid',provider:'mock',checkoutConsent,createdAt:now(),paidAt:now()};
   const payment={id:newId(),orderId:order.id,userId:user.id,amountCents:order.totalCents,currency:order.currency,status:'succeeded',provider:'mock',providerRef:`mock_${crypto.randomBytes(8).toString('hex')}`,createdAt:now()};
   const enrollments=[];
   for(const course of missingCourses){let enrollment=db.enrollments.find(e=>e.userId===user.id&&e.courseId===course.id);if(enrollment){enrollment.status='active';enrollment.orderId=order.id;}else{enrollment={id:newId(),userId:user.id,courseId:course.id,status:'active',enrolledAt:now(),orderId:order.id};db.enrollments.push(enrollment)}enrollments.push(enrollment);db.activity.push({id:newId(),userId:user.id,type:'enrollment_created',label:`Matrícula activada: ${course.title}`,at:now()});}
@@ -2510,6 +2535,9 @@ function prepareCheckout(db,body){
     ?(db.bundles||[]).find(b=>b.slug===cleanText(body.itemSlug||body.bundleSlug,120)&&b.status==='published'&&b.saleEnabled!==false)
     :db.courses.find(c=>c.slug===cleanText(body.itemSlug||body.courseSlug,120)&&c.status==='published'&&courseSaleEnabledForEnv(db,c));
   if(!target) return {error:itemType==='bundle'?'Pack no disponible':'Curso no disponible para compra',status:404};
+  const consentError=checkoutConsentError(body);
+  if(consentError)return {error:consentError,status:400};
+  const checkoutConsent=checkoutConsentRecord();
   const email=cleanText(body.email,220).toLowerCase(); const firstName=cleanText(body.firstName,120); const lastName=cleanText(body.lastName,120); const password=String(body.password||'');
   if(!email||!email.includes('@')||!firstName) return {error:'Completa nombre y email',status:400};
   let user=db.users.find(u=>u.email.toLowerCase()===email);
@@ -2528,6 +2556,7 @@ function prepareCheckout(db,body){
     .filter(o=>Date.now()-new Date(o.createdAt).getTime()<60*60*1000)
     .sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt))[0]||null;
   if(pendingOrder){
+    pendingOrder.checkoutConsent=checkoutConsent;
     const payment=db.payments.find(p=>p.orderId===pendingOrder.id)||null;
     const managed=createManagedSession(db,user,{context:body.__sessionContext||null,source:'checkout',notifyNewDevice:true});
     return {user,target,order:pendingOrder,payment,missingCourses,coupon:null,token:managed.token,reused:true};
@@ -2538,7 +2567,7 @@ function prepareCheckout(db,body){
   if(couponResult.error)return couponResult;
   const couponDiscount=couponResult.discountCents||0;
   const total=Math.max(0,pr.finalCents-couponDiscount);
-  const order={id:newId(),number:`ORD-${new Date().getFullYear()}-${String(db.orders.length+1).padStart(5,'0')}`,userId:user.id,courseId:itemType==='course'?target.id:null,bundleId:itemType==='bundle'?target.id:null,itemType,itemTitle:target.title,lineCourseIds:validCourses.map(c=>c.id),subtotalCents:pr.baseCents,promotionDiscountCents:pr.discountCents,couponDiscountCents:couponDiscount,discountCents:pr.discountCents+couponDiscount,couponCode:couponResult.coupon?.code||null,totalCents:total,currency:(target.currency||'EUR').toUpperCase(),status:total===0?'pending_free':'pending_payment',provider:total===0?'free':PAYMENT_PROVIDER,createdAt:now(),paidAt:null};
+  const order={id:newId(),number:`ORD-${new Date().getFullYear()}-${String(db.orders.length+1).padStart(5,'0')}`,userId:user.id,courseId:itemType==='course'?target.id:null,bundleId:itemType==='bundle'?target.id:null,itemType,itemTitle:target.title,lineCourseIds:validCourses.map(c=>c.id),subtotalCents:pr.baseCents,promotionDiscountCents:pr.discountCents,couponDiscountCents:couponDiscount,discountCents:pr.discountCents+couponDiscount,couponCode:couponResult.coupon?.code||null,totalCents:total,currency:(target.currency||'EUR').toUpperCase(),status:total===0?'pending_free':'pending_payment',provider:total===0?'free':PAYMENT_PROVIDER,checkoutConsent,createdAt:now(),paidAt:null};
   const payment={id:newId(),orderId:order.id,userId:user.id,amountCents:order.totalCents,currency:order.currency,status:total===0?'pending':'pending',provider:total===0?'free':PAYMENT_PROVIDER,providerRef:null,createdAt:now()};
   db.orders.push(order); db.payments.push(payment);
   const managed=createManagedSession(db,user,{context:body.__sessionContext||null,source:'checkout',notifyNewDevice:true});
@@ -3420,7 +3449,7 @@ export const handleRequest=async (req,res)=>{
           const course=base.courses.find(c=>c.id===assessmentCourseId);
           if(!course)return json(res,409,{error:'No se encontró el curso de prueba'});
 
-          const checkoutBody={itemType:'course',itemSlug:course.slug,email,firstName:'Concurrency',lastName:'Test',password};
+          const checkoutBody={itemType:'course',itemSlug:course.slug,email,firstName:'Concurrency',lastName:'Test',password,termsPrivacyAccepted:'yes',digitalContentConsent:'yes'};
           let checkoutA,checkoutB,assessmentA,assessmentB,verification,cleaned=false;
           try{
             [checkoutA,checkoutB]=await Promise.all([
