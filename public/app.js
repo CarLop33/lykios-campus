@@ -902,7 +902,7 @@ function parseSafeActionArgs(raw=''){
 }
 function runSafeInlineActions(code,event,el){
   if(!code)return false;
-  if(code.includes('if(event.target===this)')&&event.target!==el)return true;
+  if(code.includes('if(event.target===this)')&&event.target!==el)return false;
   if(code.includes("$('#checkoutRoot').innerHTML=''")){
     const root=$('#checkoutRoot');if(root)root.innerHTML='';return true;
   }
