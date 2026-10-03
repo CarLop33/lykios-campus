@@ -1439,9 +1439,10 @@ function visibleAssessment(db,user,assessment){
 }
 
 function courseAssessmentStatus(db,user,courseId){
-  const moduleIds=db.modules.filter(m=>m.courseId===courseId&&m.status==='published').map(m=>m.id);
-  const lessonIds=db.lessons.filter(l=>l.courseId===courseId&&l.status==='published').map(l=>l.id);
-  const assessments=db.assessments.filter(a=>a.status==='published'&&((a.scopeType==='module'&&moduleIds.includes(a.scopeId))||(a.scopeType==='lesson'&&lessonIds.includes(a.scopeId))));
+  const previewAccess=previewEnrolledAccess(db,user,courseId);
+  const moduleIds=db.modules.filter(m=>m.courseId===courseId&&(previewAccess||m.status==='published')).map(m=>m.id);
+  const lessonIds=db.lessons.filter(l=>l.courseId===courseId&&(previewAccess||l.status==='published')).map(l=>l.id);
+  const assessments=db.assessments.filter(a=>(previewAccess||a.status==='published')&&((a.scopeType==='module'&&moduleIds.includes(a.scopeId))||(a.scopeType==='lesson'&&lessonIds.includes(a.scopeId))));
   const passedIds=new Set(db.attempts.filter(a=>a.userId===user.id&&a.passed).map(a=>a.assessmentId));
   return {required:assessments.length,passed:assessments.filter(a=>passedIds.has(a.id)).length,allPassed:assessments.every(a=>passedIds.has(a.id))};
 }
@@ -1452,8 +1453,9 @@ function courseCompletionStatus(db,user,courseId){
   if(!course) return {eligible:false,error:'Curso no encontrado'};
   const enrollment=db.enrollments.find(e=>e.userId===user.id&&e.courseId===courseId&&e.status==='active');
   if(!enrollment) return {eligible:false,error:'Sin matrícula activa'};
-  const publishedModules=db.modules.filter(m=>m.courseId===courseId&&m.status==='published').map(m=>m.id);
-  const lessons=db.lessons.filter(l=>l.courseId===courseId&&l.status==='published'&&publishedModules.includes(l.moduleId));
+  const previewAccess=previewEnrolledAccess(db,user,courseId);
+  const eligibleModuleIds=db.modules.filter(m=>m.courseId===courseId&&(previewAccess||m.status==='published')).map(m=>m.id);
+  const lessons=db.lessons.filter(l=>l.courseId===courseId&&(previewAccess||l.status==='published')&&eligibleModuleIds.includes(l.moduleId));
   const completed=new Set(lessons.filter(l=>lessonIsComplete(db,user,enrollment,l)).map(l=>l.id));
   const incompleteLessons=lessons.filter(l=>!completed.has(l.id));
   const assessmentStatus=courseAssessmentStatus(db,user,courseId);
@@ -1468,7 +1470,7 @@ function certificateCode(){
 function publicCertificate(db,cert){
   const user=db.users.find(u=>u.id===cert.userId); const course=db.courses.find(c=>c.id===cert.courseId);
   if(!user||!course) return null;
-  return {code:cert.code,status:cert.status||'valid',studentName:`${user.firstName} ${user.lastName}`.trim(),courseTitle:course.title,courseSubtitle:course.subtitle||'',courseDescription:cleanText(course.description||'',260),issuedAt:cert.issuedAt,revokedAt:cert.revokedAt||null,issuer:'Lykios Academy',verificationPath:`/verify/${cert.code}`};
+  return {code:cert.code,status:cert.status||'valid',studentName:`${user.firstName} ${user.lastName}`.trim(),courseId:course.id,courseSlug:course.slug,courseTitle:course.title,courseSubtitle:course.subtitle||'',courseDescription:cleanText(course.description||'',260),issuedAt:cert.issuedAt,revokedAt:cert.revokedAt||null,issuer:'Lykios Academy',verificationPath:`/verify/${cert.code}`};
 }
 let certificateTemplateBytesPromise;
 function certificateTemplateBytes(){
@@ -3143,7 +3145,7 @@ export const handleRequest=async (req,res)=>{
           maybeQueueCourseCompleted(db,user,course.id);markLocalEmailsSent(db);await writeDb(db);
           existing=db.certificates.find(c=>c.userId===user.id&&c.courseId===course.id&&c.status!=='revoked');
         }
-        return json(res,200,{completion,certificate:existing?publicCertificate(db,existing):null});
+        return json(res,200,{courseId:course.id,courseSlug:course.slug,completion,certificate:existing?publicCertificate(db,existing):null});
       }
       if(url.pathname==='/api/certificate/issue' && req.method==='POST'){
         const body=await readBody(req); const course=db.courses.find(c=>c.id===body.courseId||c.slug===body.slug); if(!course)return json(res,404,{error:'Curso no encontrado'});
