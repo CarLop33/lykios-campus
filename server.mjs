@@ -2740,7 +2740,11 @@ export const handleRequest=async (req,res)=>{
   res.on('finish',()=>logEvent('info','http_request',{requestId:rid,method:req.method,path:String(req.url||'').split('?')[0],status:res.statusCode,durationMs:Date.now()-started,ip:clientIp(req)}));
   try{
     const url=new URL(req.url,'http://localhost');
-    if(!sameOrigin(req) && url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/public/') && url.pathname!=='/api/webhooks/stripe') return json(res,403,{error:'Origen no permitido'});
+    if(!sameOrigin(req) && url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/public/') && url.pathname!=='/api/webhooks/stripe' && url.pathname!=='/api/guide-lead') return json(res,403,{error:'Origen no permitido'});
+    if(url.pathname==='/api/guide-lead'){
+      const guideLead=await import('./api/guide-lead.mjs');
+      return guideLead.default(req,res);
+    }
     if(url.pathname==='/api/health' || url.pathname==='/api/health/live') return json(res,200,{ok:true,app:'Lykios LMS',version:APP_VERSION,mode:NODE_ENV});
     if(url.pathname==='/api/health/ready'){ try{const db=await readDb(); const sh=await persistence.health(); return json(res,200,{ok:true,version:APP_VERSION,schemaVersion:db.meta?.schemaVersion||null,storage:sh});}catch(e){return json(res,503,{ok:false,error:'storage_unavailable'});} }
     if(url.pathname==='/api/public/catalog' && req.method==='GET'){const db=await readDb();return json(res,200,catalogPayload(db));}
