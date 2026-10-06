@@ -54,6 +54,18 @@ function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+async function readJsonBody(req) {
+  if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) return req.body;
+  if (typeof req.body === 'string' && req.body.trim()) {
+    try { return JSON.parse(req.body); } catch {}
+  }
+  const chunks = [];
+  for await (const chunk of req) chunks.push(Buffer.from(chunk));
+  const raw = Buffer.concat(chunks).toString('utf8').trim();
+  if (!raw) return {};
+  try { return JSON.parse(raw); } catch { throw new Error('invalid_json'); }
+}
+
 async function ensureSchema(db) {
   await db.query(`
     CREATE TABLE IF NOT EXISTS lykios_leads (
@@ -204,16 +216,23 @@ export default async function handler(req, res) {
     return json(res, 403, { ok:false, error:'Origen no autorizado.' });
   }
 
-  let body = req.body || {};
-  if (typeof body === 'string') {
-    try { body = JSON.parse(body || '{}'); } catch { return json(res, 400, { ok:false, error:'Solicitud no válida.' }); }
+  let body;
+  try {
+    body = await readJsonBody(req);
+  } catch {
+    return json(res, 400, { ok:false, error:'Solicitud no válida.' });
   }
 
   if (body.website) return json(res, 200, { ok:true });
 
   const name = clean(body.name, 100);
   const email = clean(body.email, 254).toLowerCase();
-  const source = clean(body.source || SOURCE, 80);
+  const utmSourceRaw = clean(body.utm_source, 120).toLowerCase();
+  const source = utmSourceRaw === 'tiktok'
+    ? 'tiktok-dm-piel'
+    : utmSourceRaw === 'instagram'
+      ? 'instagram-dm-piel'
+      : SOURCE;
   const privacyConsent = body.privacy === true || body.privacy === 'on';
   const marketingConsent = body.marketing === true || body.marketing === 'on';
   const referrer = clean(body.referrer, 500);
@@ -221,7 +240,13 @@ export default async function handler(req, res) {
   const utmMedium = clean(body.utm_medium, 120);
   const utmCampaign = clean(body.utm_campaign, 180);
 
-  if (name.length < 2 || !validEmail(email) || !privacyConsent || source !== SOURCE) {
+  if (name.length < 2 || !validEmail(email) || !privacyConsent) {
+    console.warn('Guide lead validation failed', {
+      hasName: name.length >= 2,
+      validEmail: validEmail(email),
+      privacyConsent,
+      source
+    });
     return json(res, 400, { ok:false, error:'Revisa tu nombre, correo y aceptación de privacidad.' });
   }
 
@@ -264,7 +289,7 @@ export default async function handler(req, res) {
       subject: `${name}, aquí tienes tu Guía Piel Perfecta ✨`,
       html: emailHtml(name),
       tags: [
-        { name:'source', value:SOURCE },
+        { name:'source', value:source },
         { name:'campaign', value:'guia-piel-perfecta' }
       ]
     });
@@ -273,10 +298,10 @@ export default async function handler(req, res) {
       from: `Lykios Leads <${FROM_EMAIL}>`,
       to: [CONTACT_EMAIL],
       reply_to: email,
-      subject: `${SOURCE} — Nuevo lead: ${name}`,
-      html: `<!doctype html><html><body style="font-family:Arial,Helvetica,sans-serif;color:#0a2a30;"><h2>Nuevo lead · Piel Perfecta</h2><p><strong>Nombre:</strong> ${escapeHtml(name)}</p><p><strong>Email:</strong> ${escapeHtml(email)}</p><p><strong>Origen:</strong> ${SOURCE}</p><p><strong>Privacidad:</strong> aceptada</p><p><strong>Marketing:</strong> ${marketingConsent ? 'sí' : 'no'}</p><p><strong>Fecha:</strong> ${new Date().toISOString()}</p></body></html>`,
+      subject: `${source} — Nuevo lead: ${name}`,
+      html: `<!doctype html><html><body style="font-family:Arial,Helvetica,sans-serif;color:#0a2a30;"><h2>Nuevo lead · Piel Perfecta</h2><p><strong>Nombre:</strong> ${escapeHtml(name)}</p><p><strong>Email:</strong> ${escapeHtml(email)}</p><p><strong>Origen:</strong> ${escapeHtml(source)}</p><p><strong>Privacidad:</strong> aceptada</p><p><strong>Marketing:</strong> ${marketingConsent ? 'sí' : 'no'}</p><p><strong>Fecha:</strong> ${new Date().toISOString()}</p></body></html>`,
       tags: [
-        { name:'source', value:SOURCE },
+        { name:'source', value:source },
         { name:'type', value:'internal-lead-alert' }
       ]
     });
