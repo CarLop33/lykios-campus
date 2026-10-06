@@ -2748,6 +2748,29 @@ export const handleRequest=async (req,res)=>{
     if(url.pathname==='/api/health' || url.pathname==='/api/health/live') return json(res,200,{ok:true,app:'Lykios LMS',version:APP_VERSION,mode:NODE_ENV});
     if(url.pathname==='/api/health/ready'){ try{const db=await readDb(); const sh=await persistence.health(); return json(res,200,{ok:true,version:APP_VERSION,schemaVersion:db.meta?.schemaVersion||null,storage:sh});}catch(e){return json(res,503,{ok:false,error:'storage_unavailable'});} }
     if(url.pathname==='/api/public/catalog' && req.method==='GET'){const db=await readDb();return json(res,200,catalogPayload(db));}
+    if(url.pathname==='/api/public/piel-perfecta-guide.pdf' && req.method==='GET'){
+      const storageName='public/piel-perfecta/Guia-Piel-Perfecta-2-0-Lykios.pdf';
+      const ref='pg:'+storageName;
+      let buf;
+      try{
+        buf=await resourceStore.read(ref);
+      }catch{
+        const source='https://at.adobe.com/cOiIDYKnGPauStTe';
+        const response=await fetch(source,{redirect:'follow',signal:AbortSignal.timeout(15000)});
+        if(!response.ok)return json(res,502,{error:'No se pudo preparar la guía'});
+        buf=Buffer.from(await response.arrayBuffer());
+        if(!buf.length||buf.length>MAX_RESOURCE_BYTES||buf.subarray(0,4).toString()!=='%PDF')return json(res,502,{error:'El archivo de la guía no es válido'});
+        await resourceStore.save(storageName,buf,'application/pdf');
+      }
+      res.writeHead(200,{
+        ...securityHeaders,
+        'content-type':'application/pdf',
+        'content-disposition':'inline; filename="Guia-Piel-Perfecta-2-0-Lykios.pdf"',
+        'content-length':String(buf.length),
+        'cache-control':'public, max-age=86400'
+      });
+      return res.end(buf);
+    }
     if(IS_PREVIEW && url.pathname==='/api/public/security-self-check' && req.method==='GET'){
       const fake={
         sessions:[],knownDevices:[],securityEvents:[],videoLeases:[],emailOutbox:[],
