@@ -2593,10 +2593,20 @@ async function stripeCreateCheckoutSession(order,user){
   params.set('mode','payment');
   params.set('client_reference_id',order.id);
   params.set('customer_email',user.email);
+  params.set('customer_creation','always');
+  params.set('billing_address_collection','auto');
+  params.set('automatic_tax[enabled]','true');
+  params.set('tax_id_collection[enabled]','true');
+  params.set('invoice_creation[enabled]','true');
+  params.set('invoice_creation[invoice_data][description]',`Lykios Academy · ${order.itemTitle}`);
+  params.set('invoice_creation[invoice_data][metadata][order_id]',order.id);
+  params.set('invoice_creation[invoice_data][metadata][order_number]',order.number);
   params.set('success_url',`${PUBLIC_APP_ORIGIN}/?payment=success&order=${encodeURIComponent(order.id)}`);
   params.set('cancel_url',`${PUBLIC_APP_ORIGIN}/?payment=cancel&order=${encodeURIComponent(order.id)}`);
   params.set('line_items[0][price_data][currency]',String(order.currency||'EUR').toLowerCase());
   params.set('line_items[0][price_data][product_data][name]',order.itemTitle);
+  params.set('line_items[0][price_data][product_data][tax_code]','txcd_20060158');
+  params.set('line_items[0][price_data][tax_behavior]','inclusive');
   params.set('line_items[0][price_data][unit_amount]',String(order.totalCents));
   params.set('line_items[0][quantity]','1');
   params.set('metadata[order_id]',order.id); params.set('metadata[order_number]',order.number);
@@ -2668,6 +2678,7 @@ async function handleStripeEvent(db,event){
   if(['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed','checkout.session.expired'].includes(event.type)){
     const orderId=object?.metadata?.order_id||object?.client_reference_id;
     order=db.orders.find(o=>o.id===orderId)||null;
+    if(order&&object.invoice) order.invoiceId=typeof object.invoice==='string'?object.invoice:(object.invoice?.id||order.invoiceId||null);
     if(['checkout.session.completed','checkout.session.async_payment_succeeded'].includes(event.type)){
       if(!order) result={error:'order_not_found'};
       else if(Number(object.amount_total)!==Number(order.totalCents)||String(object.currency||'').toUpperCase()!==String(order.currency||'').toUpperCase()){markPaymentFailed(db,order,'Importe o moneda no coinciden',object.id);result={error:'amount_mismatch'};}
@@ -2677,6 +2688,21 @@ async function handleStripeEvent(db,event){
       if(order)markPaymentFailed(db,order,event.type,object.id);
       result={failed:true};
     }
+  }else if(['invoice.finalized','invoice.paid','invoice.payment_succeeded','invoice.voided'].includes(event.type)){
+    const orderId=object?.metadata?.order_id||null;
+    order=orderId?db.orders.find(o=>o.id===orderId)||null:null;
+    if(order){
+      order.invoiceId=object.id||order.invoiceId||null;
+      order.invoiceNumber=object.number||order.invoiceNumber||null;
+      order.invoiceStatus=object.status||order.invoiceStatus||null;
+      order.hostedInvoiceUrl=object.hosted_invoice_url||order.hostedInvoiceUrl||null;
+      order.invoicePdf=object.invoice_pdf||order.invoicePdf||null;
+      order.invoiceTotalCents=Number.isFinite(Number(object.total))?Number(object.total):order.invoiceTotalCents||null;
+      order.invoiceSubtotalCents=Number.isFinite(Number(object.subtotal))?Number(object.subtotal):order.invoiceSubtotalCents||null;
+      if(Number.isFinite(Number(object.total))&&Number.isFinite(Number(object.total_excluding_tax))) order.invoiceTaxCents=Math.max(0,Number(object.total)-Number(object.total_excluding_tax));
+      order.invoiceUpdatedAt=now();
+      result={invoiceRecorded:true,status:object.status||null};
+    }else result={error:'order_not_found'};
   }else if(event.type==='charge.refunded'){
     const paymentIntent=typeof object.payment_intent==='string'?object.payment_intent:object.payment_intent?.id;
     const payment=(db.payments||[]).find(p=>p.provider==='stripe'&&(p.providerRef===paymentIntent||p.providerRef===object.id))||null;
@@ -2999,7 +3025,7 @@ export const handleRequest=async (req,res)=>{
       }
       return json(res,503,{error:'El Campus está procesando otro pedido. Inténtalo de nuevo.'});
     }
-    if(url.pathname==='/api/checkout/status' && req.method==='GET'){const db=await readDb();const user=await auth(req,db);if(!user)return json(res,401,{error:'No autenticado'});const order=db.orders.find(o=>o.id===url.searchParams.get('order')&&o.userId===user.id);if(!order)return json(res,404,{error:'Pedido no encontrado'});return json(res,200,{order:{id:order.id,number:order.number,status:order.status,totalCents:order.totalCents,currency:order.currency,paidAt:order.paidAt||null}});}
+    if(url.pathname==='/api/checkout/status' && req.method==='GET'){const db=await readDb();const user=await auth(req,db);if(!user)return json(res,401,{error:'No autenticado'});const order=db.orders.find(o=>o.id===url.searchParams.get('order')&&o.userId===user.id);if(!order)return json(res,404,{error:'Pedido no encontrado'});return json(res,200,{order:{id:order.id,number:order.number,status:order.status,totalCents:order.totalCents,currency:order.currency,paidAt:order.paidAt||null,invoice:{id:order.invoiceId||null,number:order.invoiceNumber||null,status:order.invoiceStatus||null,hostedUrl:order.hostedInvoiceUrl||null,pdfUrl:order.invoicePdf||null,taxCents:order.invoiceTaxCents??null}}});}
     if(url.pathname==='/api/webhooks/stripe' && req.method==='POST'){
       if(PAYMENT_PROVIDER!=='stripe')return json(res,404,{error:'No disponible'});
       const raw=await readRawBody(req);
